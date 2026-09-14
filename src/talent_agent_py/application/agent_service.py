@@ -11,8 +11,8 @@ from talent_agent_py.application.clarification_service import (
     validate_answer,
 )
 from talent_agent_py.application.exceptions import (
-    InvalidClarificationAnswerError,
     FeatureDisabledError,
+    InvalidClarificationAnswerError,
     ModelOutputError,
     RunNotFoundError,
     SessionNotFoundError,
@@ -34,7 +34,6 @@ from talent_agent_py.domain.conversation import (
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
 from talent_agent_py.domain.plan import SearchPlanDraft
 from talent_agent_py.infrastructure.persistence.models import RunRecord
-from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 from talent_agent_py.infrastructure.runtime.task_registry import TaskRegistry
 from talent_agent_py.settings import Settings
 from talent_agent_py.telemetry import INTERRUPTIONS, RUN_OUTCOMES, RUN_STAGES
@@ -61,6 +60,8 @@ class AgentService:
         self._talent_search = talent_search
         self._tasks = task_registry
         self._settings = settings
+        # 演示打断时两个 HTTP 请求会短暂重叠，只串行化消息序号的生成和提交。
+        self._message_write_lock = asyncio.Lock()
 
     @staticmethod
     def _run_view(record: RunRecord) -> RunView:
@@ -100,23 +101,24 @@ class AgentService:
         if not self._settings.enable_agent:
             raise FeatureDisabledError("当前环境尚未开启自然语言找人")
 
-        async with self._uow_factory() as uow:
-            session_record = await uow.sessions.get_owned(session_id, user.user_id)
-            if session_record is None:
-                raise SessionNotFoundError("会话不存在")
-            message, created = await uow.messages.append_user(
-                session_id, client_message_id, content
-            )
-            if not created:
-                existing_run = await uow.runs.get_by_trigger(session_id, message.sequence)
-                if existing_run and existing_run.result_json:
-                    return MessageOutcome(
-                        kind="RESULT",
-                        result=SearchResult.model_validate(existing_run.result_json, strict=False),
-                    )
-                if existing_run:
-                    return MessageOutcome(kind="STATUS", run=self._run_view(existing_run))
-                return MessageOutcome(kind="CHAT", reply="这条消息已经收到。")
+        async with self._message_write_lock:
+            async with self._uow_factory() as uow:
+                session_record = await uow.sessions.get_owned(session_id, user.user_id)
+                if session_record is None:
+                    raise SessionNotFoundError("会话不存在")
+                message, created = await uow.messages.append_user(
+                    session_id, client_message_id, content
+                )
+                if not created:
+                    existing_run = await uow.runs.get_by_trigger(session_id, message.sequence)
+                    if existing_run and existing_run.result_json:
+                        return MessageOutcome(
+                            kind="RESULT",
+                            result=self._bounded_result(existing_run.result_json),
+                        )
+                    if existing_run:
+                        return MessageOutcome(kind="STATUS", run=self._run_view(existing_run))
+                    return MessageOutcome(kind="CHAT", reply="这条消息已经收到。")
 
         active_run_id, current_plan, pending = await self._load_message_context(session_id, user)
         route = await self._router.route(
@@ -128,7 +130,8 @@ class AgentService:
 
         async with self._uow_factory() as uow:
             stored_message = await uow.messages.get_by_client_id(session_id, client_message_id)
-            assert stored_message is not None
+            if stored_message is None:
+                raise RuntimeError("已提交的消息记录无法重新读取")
             stored_message.route_type = route.message_type.value
 
         if route.message_type is MessageType.CASUAL_CHAT:
@@ -142,22 +145,36 @@ class AgentService:
         if route.message_type is MessageType.PAGE_ACTION:
             if current_plan is None:
                 raise StalePageReferenceError("当前没有可分页的搜索计划")
+            current_result = await self.get_result(session_id, user)
+            if current_result is None:
+                raise StalePageReferenceError("当前没有可分页的搜索结果")
+            target_page = max(1, current_result.page + (route.page_delta or 1))
             return await self.get_page(
                 PageReference(
                     session_id=session_id,
                     plan_version=current_plan.version,
-                    page=2,
+                    page=target_page,
                 ),
                 user,
             )
         if route.message_type is MessageType.UNKNOWN:
             return await self._store_intent_clarification(
-                session_id, stored_message.sequence, current_plan, user
+                session_id,
+                stored_message.sequence,
+                current_plan,
+                user,
+                active_run_id=active_run_id,
+                existing_card=pending,
             )
 
         initial_draft = None
         entities_resolved = False
         if clarification_answer:
+            immediate = await self._handle_non_search_answer(
+                session_id, clarification_answer, user
+            )
+            if immediate is not None:
+                return immediate
             initial_draft, entities_resolved = await self._apply_structured_answer(
                 session_id, clarification_answer, user
             )
@@ -171,6 +188,40 @@ class AgentService:
             initial_draft=initial_draft,
             entities_resolved=entities_resolved,
         )
+
+    async def _handle_non_search_answer(
+        self,
+        session_id: str,
+        answer: ClarificationAnswer,
+        user: UserContext,
+    ) -> MessageOutcome | None:
+        """处理只结束澄清、不应立即启动搜索的结构化答案。"""
+
+        async with self._uow_factory() as uow:
+            session_record = await uow.sessions.get_owned(session_id, user.user_id)
+            if session_record is None:
+                raise SessionNotFoundError("会话不存在")
+            pending = await uow.clarifications.get_with_draft(session_id)
+            if pending is None:
+                return None
+            card, _ = pending
+            validate_answer(card, answer)
+            if card.kind is ClarificationKind.MESSAGE_INTENT:
+                await uow.clarifications.clear(session_id)
+                reply = (
+                    "好的，这句话不会修改当前搜索。"
+                    if answer.value == "CASUAL_CHAT"
+                    else "请继续描述要修改的搜索条件。"
+                )
+                return MessageOutcome(kind="CHAT", reply=reply)
+            if (
+                card.kind
+                in {ClarificationKind.UNSUPPORTED_CONDITION, ClarificationKind.ENTITY_NOT_FOUND}
+                and answer.value == "RESTATE"
+            ):
+                await uow.clarifications.clear(session_id)
+                return MessageOutcome(kind="CHAT", reply="请重新描述要执行的搜索条件。")
+        return None
 
     async def _apply_structured_answer(
         self,
@@ -200,7 +251,37 @@ class AgentService:
                 data = draft.model_dump(mode="python")
                 data["unsupported_conditions"] = data["unsupported_conditions"][1:]
                 return SearchPlanDraft.model_validate(data), False
+            if card.kind is ClarificationKind.ENTITY_NOT_FOUND:
+                if answer.value != "IGNORE":
+                    raise InvalidClarificationAnswerError("请重新描述可执行的搜索条件")
+                return self._remove_unresolved_entity(draft, card.field), False
             raise InvalidClarificationAnswerError("该类型澄清需要重新描述搜索条件")
+
+    @staticmethod
+    def _remove_unresolved_entity(draft: SearchPlanDraft, field: str) -> SearchPlanDraft:
+        """按受控字段路径删除未找到的条件值，并移除对应阻塞项。"""
+
+        data = draft.model_dump(mode="python")
+        conditions = data["conditions"]
+        if ":" in field:
+            field_name, raw_index = field.split(":", 1)
+            values_key = "labels" if field_name == "school_level" else "names"
+            condition = conditions.get(field_name)
+            if condition is not None and raw_index.isdigit():
+                index = int(raw_index)
+                values = condition.get(values_key, [])
+                if 0 <= index < len(values):
+                    values.pop(index)
+                if not values:
+                    conditions[field_name] = None
+        elif field in {"minimum_degree", "current_city", "expected_city"}:
+            conditions[field] = None
+        else:
+            raise InvalidClarificationAnswerError("无法忽略该实体条件")
+        data["ambiguities"] = [
+            item for item in data["ambiguities"] if item["field"] != field
+        ]
+        return SearchPlanDraft.model_validate(data)
 
     async def _start_search_run(
         self,
@@ -284,17 +365,49 @@ class AgentService:
                         run_id, status=RunStatus.SUPERSEDED, stage="cancelled"
                     )
             raise
-        except ModelOutputError:
-            return await self._finish_error(run_id, ResultStatus.MODEL_ERROR, "MODEL_ERROR")
+        except ModelOutputError as exc:
+            logger.warning(
+                "大模型阶段失败",
+                session_id=session_id,
+                run_id=run_id,
+                error=str(exc),
+            )
+            return await self._finish_error(
+                run_id,
+                ResultStatus.MODEL_ERROR,
+                "MODEL_ERROR",
+                message=str(exc),
+            )
         except TalentSearchDeniedError:
             return await self._finish_error(run_id, ResultStatus.DENIED, "DENIED")
         except TalentSearchDependencyError:
             return await self._finish_error(run_id, ResultStatus.DEPENDENCY_ERROR, "DEPENDENCY_ERROR")
+        except Exception:
+            logger.exception("图执行发生未分类异常", session_id=session_id, run_id=run_id)
+            return await self._finish_error(
+                run_id, ResultStatus.INTERNAL_ERROR, "INTERNAL_ERROR"
+            )
 
     async def _finish_error(
-        self, run_id: str, status: ResultStatus, code: str
+        self,
+        run_id: str,
+        status: ResultStatus,
+        code: str,
+        *,
+        message: str = "本轮处理失败，请稍后重试。",
     ) -> SearchResult:
         async with self._uow_factory() as uow:
+            existing = await uow.runs.get(run_id)
+            if existing is not None and existing.status in {
+                RunStatus.CANCELLED.value,
+                RunStatus.SUPERSEDED.value,
+            }:
+                return SearchResult(
+                    status=ResultStatus(existing.status),
+                    run_id=run_id,
+                    plan_version=0,
+                    message="本轮搜索已停止或被新条件替代。",
+                )
             run = await uow.runs.update(
                 run_id,
                 status=RunStatus.FAILED,
@@ -306,7 +419,7 @@ class AgentService:
                 status=status,
                 run_id=run_id,
                 plan_version=0,
-                message="本轮处理失败，请稍后重试。",
+                message=message,
             )
             run.result_json = result.model_dump(mode="json")
             RUN_OUTCOMES.labels(status.value).inc()
@@ -325,10 +438,21 @@ class AgentService:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
             if session_record is None:
                 raise SessionNotFoundError("会话不存在")
-            run = await uow.runs.update(
-                run_id, status=RunStatus.CANCELLED, stage="cancelled",
-                result_status=ResultStatus.CANCELLED.value,
-            )
+            run = await uow.runs.get(run_id)
+            if run is None:
+                raise RunNotFoundError("运行记录不存在")
+            if run.status not in {
+                RunStatus.SUCCEEDED.value,
+                RunStatus.FAILED.value,
+                RunStatus.CANCELLED.value,
+                RunStatus.SUPERSEDED.value,
+            }:
+                run = await uow.runs.update(
+                    run_id,
+                    status=RunStatus.CANCELLED,
+                    stage="cancelled",
+                    result_status=ResultStatus.CANCELLED.value,
+                )
         return MessageOutcome(kind="STATUS", run=self._run_view(run))
 
     async def _store_intent_clarification(
@@ -337,20 +461,33 @@ class AgentService:
         message_sequence: int,
         current_plan,
         user: UserContext,
+        *,
+        active_run_id: str | None,
+        existing_card=None,
     ) -> MessageOutcome:
-        card = intent_card()
+        card = existing_card or intent_card()
         async with self._uow_factory() as uow:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
             if session_record is None:
                 raise SessionNotFoundError("会话不存在")
-            run = await uow.runs.create(session_record, message_sequence)
-            await uow.clarifications.save(session_id, message_sequence, card)
-            await uow.runs.update(
-                run.id,
-                status=RunStatus.NEEDS_CLARIFICATION,
-                stage="message_intent_clarification",
-                result_status=ResultStatus.NEEDS_CLARIFICATION.value,
-            )
+            if existing_card is not None and active_run_id:
+                run = await uow.runs.get(active_run_id)
+                if run is None:
+                    raise RunNotFoundError("运行记录不存在")
+            else:
+                # 运行中的搜索保持 active；意图澄清作为旁路记录，不主动取消它。
+                run = await uow.runs.create(
+                    session_record,
+                    message_sequence,
+                    activate=active_run_id is None,
+                )
+                await uow.clarifications.save(session_id, message_sequence, card)
+                await uow.runs.update(
+                    run.id,
+                    status=RunStatus.NEEDS_CLARIFICATION,
+                    stage="message_intent_clarification",
+                    result_status=ResultStatus.NEEDS_CLARIFICATION.value,
+                )
         return MessageOutcome(kind="RESULT", result=SearchResult(
             status=ResultStatus.NEEDS_CLARIFICATION,
             run_id=run.id,
@@ -385,9 +522,19 @@ class AgentService:
                 return None
             run = await uow.runs.get(session_record.active_run_id)
             return (
-                SearchResult.model_validate(run.result_json, strict=False)
+                self._bounded_result(run.result_json)
                 if run and run.result_json else None
             )
+
+    def _bounded_result(self, payload: dict) -> SearchResult:
+        """兼容旧运行快照，并保证恢复历史时每页也只展示 10 条。"""
+
+        result = SearchResult.model_validate(payload, strict=False)
+        if len(result.candidates) <= self._settings.default_page_size:
+            return result
+        data = result.model_dump(mode="python")
+        data["candidates"] = data["candidates"][: self._settings.default_page_size]
+        return SearchResult.model_validate(data)
 
     async def get_page(
         self, reference: PageReference, user: UserContext
@@ -401,7 +548,9 @@ class AgentService:
             plan = await uow.plans.get_current(reference.session_id)
             if plan is None or plan.version != reference.plan_version:
                 raise StalePageReferenceError("分页引用已失效")
-            run = await uow.runs.create(session_record, reference.page)
+            run = await uow.runs.create(
+                session_record, None, activate=False
+            )
 
         request = compile_search_request(plan, self._settings, page=reference.page)
         response = await self._talent_search.search_candidates(request, user)
@@ -418,6 +567,7 @@ class AgentService:
             status=status,
             run_id=run.id,
             plan_version=plan.version,
+            page=reference.page,
             candidates=response.candidates,
             total=response.total,
             next_page=next_page,

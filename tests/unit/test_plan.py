@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from talent_agent_py.domain.enums import LocationScope, PatchOperation, SupportedField
 from talent_agent_py.domain.plan import (
     ApplicantNameCondition,
+    CompanyCondition,
     LocationCondition,
     PlanPatch,
     PlanPatchItem,
@@ -54,3 +55,20 @@ def test_reset_clears_all_previous_conditions():
         operations=[PlanPatchItem(operation=PatchOperation.RESET)],
     )
     assert apply_plan_patch(current, patch) == SearchConditions()
+
+
+def test_company_patch_accepts_model_single_value_shape():
+    """模型把单个公司写成 value 时，应归一化为 names 数组。"""
+
+    patch = PlanPatch(
+        base_plan_version=1,
+        operations=[PlanPatchItem(
+            operation=PatchOperation.ADD,
+            field=SupportedField.COMPANY,
+            value={"value": "阿里巴巴", "scope": "CURRENT_OR_HISTORY"},
+        )],
+    )
+
+    updated = apply_plan_patch(SearchConditions(), patch)
+
+    assert updated.company == CompanyCondition(names=["阿里巴巴"])

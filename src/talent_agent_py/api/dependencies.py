@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import Cookie, Header, Request
+from fastapi import Cookie, Header, HTTPException, Request
 from pydantic import SecretStr
 
 from talent_agent_py.application.agent_service import AgentService
@@ -20,6 +20,13 @@ async def get_user_context(
     ] = None,
 ) -> UserContext:
     """构造请求身份；招聘 Cookie 只保留在本次调用的内存中。"""
+
+    if auth_open_id_token and (
+        len(auth_open_id_token) > 4096
+        or ";" in auth_open_id_token
+        or any(ord(character) < 32 for character in auth_open_id_token)
+    ):
+        raise HTTPException(status_code=400, detail="招聘登录 Cookie 格式无效")
 
     return UserContext(
         user_id=x_user_id,

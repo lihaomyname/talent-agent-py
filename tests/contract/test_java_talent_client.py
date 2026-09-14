@@ -5,8 +5,12 @@ import pytest
 from pydantic import SecretStr
 
 from talent_agent_py.application.exceptions import TalentSearchDeniedError
-from talent_agent_py.application.ports.talent_search import TalentSearchRequest
+from talent_agent_py.application.ports.talent_search import (
+    EntityResolutionRequest,
+    TalentSearchRequest,
+)
 from talent_agent_py.domain.conversation import UserContext
+from talent_agent_py.domain.enums import EntityKind, EntityResolutionStatus
 from talent_agent_py.infrastructure.clients.java_talent import JavaTalentClient
 from talent_agent_py.settings import Settings
 
@@ -67,16 +71,22 @@ async def test_browser_api_forwards_only_whitelisted_cookie_and_maps_page_result
                 "pages": 2,
                 "total": 2,
                 "lastPage": False,
-                "list": [{
-                    "id": "encrypted-candidate-id",
-                    "applicantName": "候选人甲",
-                    "nowPosition": "Java 开发",
-                    "nowCompany": "示例公司",
-                    "livePlaceName": "杭州",
-                    "mobile": "不应进入结果",
-                    "email": "private@example.com",
-                    "labelList": [{"labelName": "985"}],
-                }],
+                "list": [
+                    {
+                        "id": "encrypted-candidate-id",
+                        "applicantName": "候选人甲",
+                        "nowPosition": "Java 开发",
+                        "nowCompany": "示例公司",
+                        "livePlaceName": "杭州",
+                        "mobile": "不应进入结果",
+                        "email": "private@example.com",
+                        "labelList": [{"labelName": "985"}],
+                    },
+                    {
+                        "id": "should-be-trimmed",
+                        "applicantName": "候选人乙",
+                    },
+                ],
             },
         })
 
@@ -101,6 +111,7 @@ async def test_browser_api_forwards_only_whitelisted_cookie_and_maps_page_result
     assert captured["headers"]["cookie"] == "authOpenIdToken=test-cookie-token"
     assert result.total == 2
     assert result.has_next is True
+    assert len(result.candidates) == 1
     assert result.candidates[0].candidate_id == "encrypted-candidate-id"
     # 宽版接口包含联系方式，安全卡片必须主动丢弃这些字段。
     serialized = result.candidates[0].model_dump()
@@ -123,3 +134,31 @@ async def test_browser_api_rejects_request_without_user_cookie():
             UserContext(user_id="user-1"),
         )
     await client.aclose()
+
+
+async def test_browser_city_resolution_accepts_name_without_city_suffix():
+    """用户输入“杭州”时应命中字典中的“杭州市”。"""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "code": "200",
+            "data": {"热门城市": [{"id": "229", "name": "杭州市"}]},
+        })
+
+    client = httpx.AsyncClient(
+        base_url="https://zhaopin.netease.com",
+        transport=httpx.MockTransport(handler),
+    )
+    adapter = JavaTalentClient(client, Settings(
+        java_base_url="https://zhaopin.netease.com",
+        java_requires_user_cookie=True,
+        java_direct_browser_api=True,
+    ))
+    result = await adapter.resolve_entities(
+        [EntityResolutionRequest(key="current_city", kind=EntityKind.CITY, text="杭州")],
+        UserContext(user_id="user-1", auth_open_id_token=SecretStr("test-cookie-token")),
+    )
+    await client.aclose()
+
+    assert result[0].status is EntityResolutionStatus.RESOLVED
+    assert result[0].candidates[0].code == "229"

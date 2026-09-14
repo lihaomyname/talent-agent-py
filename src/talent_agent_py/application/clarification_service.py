@@ -96,6 +96,23 @@ def entity_ambiguity_card(
     )
 
 
+def entity_not_found_card(*, field: str, input_text: str | None) -> ClarificationCard:
+    """实体未命中时给出可继续执行的选择，避免生成空选项卡片。"""
+
+    shown_text = input_text or field
+    return ClarificationCard(
+        question_id=_question_id(),
+        kind=ClarificationKind.ENTITY_NOT_FOUND,
+        field=field,
+        title=f"没有找到“{shown_text}”对应的可搜索项，要忽略这个条件吗？",
+        options=[
+            ClarificationOption(value="IGNORE", label="忽略后继续"),
+            ClarificationOption(value="RESTATE", label="重新描述条件"),
+        ],
+        context={"field": field, "input_text": shown_text},
+    )
+
+
 def intent_card() -> ClarificationCard:
     """无法确认一句话是否修改搜索时使用。"""
 

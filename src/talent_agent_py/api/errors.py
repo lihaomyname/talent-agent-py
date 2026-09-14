@@ -4,8 +4,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from talent_agent_py.application.exceptions import (
-    InvalidClarificationAnswerError,
     FeatureDisabledError,
+    InvalidClarificationAnswerError,
     ModelOutputError,
     RunNotFoundError,
     SessionNotFoundError,

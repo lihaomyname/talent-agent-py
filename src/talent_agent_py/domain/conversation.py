@@ -1,7 +1,6 @@
 """会话、运行、澄清和搜索结果模型。"""
 
 from datetime import datetime
-
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -32,6 +31,7 @@ class MessageRoute(StrictModel):
     affects_active_run: bool
     confidence: float = Field(ge=0, le=1)
     reason_code: str = Field(min_length=1, max_length=100)
+    page_delta: int | None = Field(default=None, ge=-1, le=1)
 
 
 class ClarificationOption(StrictModel):
@@ -71,6 +71,16 @@ class SessionView(StrictModel):
     updated_at: datetime
 
 
+class SessionSummaryView(StrictModel):
+    """历史会话列表使用的轻量视图。"""
+
+    session_id: str
+    title: str
+    status: str
+    plan_version: int = 0
+    updated_at: datetime
+
+
 class RunView(StrictModel):
     """对外安全返回的运行进度视图。"""
 
@@ -89,7 +99,7 @@ class PageReference(StrictModel):
 
     session_id: str
     plan_version: int = Field(ge=1)
-    page: int = Field(ge=1)
+    page: int = Field(ge=1, le=1000)
 
 
 class CandidateCard(StrictModel):
@@ -109,6 +119,7 @@ class SearchResult(StrictModel):
     status: ResultStatus
     run_id: str
     plan_version: int = Field(ge=0)
+    page: int = Field(default=1, ge=1, le=1000)
     candidates: list[CandidateCard] = Field(default_factory=list)
     total: int | None = Field(default=None, ge=0)
     next_page: PageReference | None = None

@@ -3,12 +3,20 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from talent_agent_py.application.ports.talent_search import TalentSearchRequest
 from talent_agent_py.application.entity_resolution import resolve_draft_entities
+from talent_agent_py.application.ports.talent_search import (
+    EntityCandidate,
+    EntityResolution,
+    TalentSearchRequest,
+)
 from talent_agent_py.domain.conversation import UserContext
 from talent_agent_py.domain.enums import EntityKind, EntityResolutionStatus
-from talent_agent_py.domain.plan import DegreeCondition, ResolvedEntity, SearchConditions, SearchPlanDraft
-from talent_agent_py.application.ports.talent_search import EntityCandidate, EntityResolution
+from talent_agent_py.domain.plan import (
+    DegreeCondition,
+    ResolvedEntity,
+    SearchConditions,
+    SearchPlanDraft,
+)
 
 
 def test_java_request_rejects_operator_and_unmask_fields():
@@ -21,7 +29,7 @@ def test_java_request_rejects_operator_and_unmask_fields():
 
 def test_java_request_rejects_excessive_page_size():
     with pytest.raises(ValidationError):
-        TalentSearchRequest(pageSize=1000)
+        TalentSearchRequest(pageSize=11)
 
 
 async def test_model_supplied_business_code_is_replaced_by_java():

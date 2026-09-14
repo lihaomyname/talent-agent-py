@@ -44,6 +44,31 @@ class SessionRepository:
         )
         return await self.session.scalar(query)
 
+    async def list_owned(self, owner_user_id: str, *, limit: int = 20) -> list[tuple]:
+        """按最近更新时间返回用户会话，并附带首条消息和当前运行状态。"""
+
+        first_message = (
+            select(MessageRecord.content)
+            .where(MessageRecord.session_id == AgentSessionRecord.id)
+            .order_by(MessageRecord.sequence)
+            .limit(1)
+            .scalar_subquery()
+        )
+        query = (
+            select(
+                AgentSessionRecord,
+                first_message.label("first_message"),
+                RunRecord.status.label("run_status"),
+                RunRecord.result_status.label("result_status"),
+            )
+            .outerjoin(RunRecord, RunRecord.id == AgentSessionRecord.active_run_id)
+            .where(AgentSessionRecord.owner_user_id == owner_user_id)
+            .order_by(AgentSessionRecord.updated_at.desc())
+            .limit(limit)
+        )
+        rows = (await self.session.execute(query)).all()
+        return [tuple(row) for row in rows]
+
 
 class MessageRepository:
     """保存有序消息并处理幂等重试。"""
@@ -209,8 +234,14 @@ class RunRepository:
         self.session = session
 
     async def create(
-        self, session_record: AgentSessionRecord, trigger_message_sequence: int
+        self,
+        session_record: AgentSessionRecord,
+        trigger_message_sequence: int | None,
+        *,
+        activate: bool = True,
     ) -> RunRecord:
+        """创建运行；翻页和旁路澄清可选择不替换当前活动运行。"""
+
         run = RunRecord(
             id=new_id("run"),
             session_id=session_record.id,
@@ -219,7 +250,8 @@ class RunRepository:
             stage="queued",
         )
         self.session.add(run)
-        session_record.active_run_id = run.id
+        if activate:
+            session_record.active_run_id = run.id
         await self.session.flush()
         return run
 

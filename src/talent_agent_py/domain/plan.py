@@ -128,6 +128,7 @@ class Ambiguity(StrictModel):
     reason: str = Field(min_length=1, max_length=500)
     options: list[str] = Field(default_factory=list, max_length=20)
     entity_options: list[ResolvedEntity] = Field(default_factory=list, max_length=20)
+    input_text: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class SearchPlanDraft(StrictModel):
@@ -210,8 +211,35 @@ def apply_plan_patch(current: SearchConditions, patch: PlanPatch) -> SearchCondi
             continue
 
         model_type = _FIELD_MODEL[operation.field]
+        normalized_value = _normalize_patch_value(operation.field, operation.value)
         values[key] = model_type.model_validate(
-            operation.value, strict=False
+            normalized_value, strict=False
         ).model_dump(mode="python")
 
     return SearchConditions.model_validate(values)
+
+
+def _normalize_patch_value(field: SupportedField, value: JsonValue | None) -> JsonValue | None:
+    """修正常见的单值列表形状，不改变模型识别出的业务含义。"""
+
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    list_field: str | None = None
+    aliases: tuple[str, ...] = ()
+    if field in {SupportedField.COMPANY, SupportedField.SCHOOL}:
+        list_field = "names"
+        aliases = ("value", "name")
+    elif field is SupportedField.SCHOOL_LEVEL:
+        list_field = "labels"
+        aliases = ("value", "label")
+
+    if list_field and list_field not in normalized:
+        for alias in aliases:
+            raw_value = normalized.pop(alias, None)
+            if raw_value:
+                normalized[list_field] = (
+                    raw_value if isinstance(raw_value, list) else [raw_value]
+                )
+                break
+    return normalized

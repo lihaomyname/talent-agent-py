@@ -1,24 +1,27 @@
 """FastAPI 应用工厂和进程生命周期。"""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from talent_agent_py.api.errors import register_error_handlers
 from talent_agent_py.api.v1.router import router as v1_router
 from talent_agent_py.application.agent_service import AgentService
 from talent_agent_py.application.message_router import MessageRouter
+from talent_agent_py.application.ports.llm import LLMClient
+from talent_agent_py.application.ports.talent_search import TalentSearchPort
 from talent_agent_py.application.session_service import SessionService
 from talent_agent_py.infrastructure.clients.internal_llm import (
     InternalLLMClient,
     UnavailableLLMClient,
 )
 from talent_agent_py.infrastructure.clients.java_talent import JavaTalentClient
-from talent_agent_py.application.ports.llm import LLMClient
-from talent_agent_py.application.ports.talent_search import TalentSearchPort
 from talent_agent_py.infrastructure.persistence.database import Database
 from talent_agent_py.infrastructure.persistence.models import Base
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
@@ -26,7 +29,9 @@ from talent_agent_py.infrastructure.runtime.task_registry import TaskRegistry
 from talent_agent_py.orchestration.graph import build_graph
 from talent_agent_py.orchestration.nodes import GraphDependencies
 from talent_agent_py.settings import Settings, get_settings
-from talent_agent_py.telemetry import configure_telemetry
+from talent_agent_py.telemetry import RequestResponseLogMiddleware, configure_telemetry
+
+STATIC_DIR = Path(__file__).with_name("static")
 
 
 def create_app(
@@ -56,7 +61,10 @@ def create_app(
             else UnavailableLLMClient()
         )
         talent_search = talent_search_client or JavaTalentClient(http_client, settings)
-        uow_factory = lambda: UnitOfWork(database.session_factory)
+        def uow_factory() -> UnitOfWork:
+            """为一次业务操作创建独立事务单元。"""
+
+            return UnitOfWork(database.session_factory)
         graph = build_graph(GraphDependencies(
             uow_factory=uow_factory,
             llm=llm,
@@ -89,7 +97,15 @@ def create_app(
     )
     register_error_handlers(app)
     configure_telemetry(app)
+    app.add_middleware(RequestResponseLogMiddleware)
     app.include_router(v1_router, prefix=settings.api_prefix)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def conversation_page() -> FileResponse:
+        """返回无需单独构建的 Agent 演示页面。"""
+
+        return FileResponse(STATIC_DIR / "index.html")
 
     @app.get("/health")
     async def health() -> dict[str, str]:

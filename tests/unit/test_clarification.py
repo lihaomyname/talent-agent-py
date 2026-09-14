@@ -4,6 +4,7 @@ import pytest
 
 from talent_agent_py.application.clarification_service import (
     apply_location_answer,
+    entity_not_found_card,
     location_scope_card,
 )
 from talent_agent_py.application.exceptions import InvalidClarificationAnswerError
@@ -32,3 +33,11 @@ def test_clarification_rejects_forged_value():
             card,
             ClarificationAnswer(question_id=card.question_id, value="OTHER"),
         )
+
+
+def test_entity_not_found_card_always_has_actionable_options():
+    """Java 未找到实体时不能生成空选项卡片。"""
+
+    card = entity_not_found_card(field="current_city", input_text="不存在的城市")
+
+    assert {option.value for option in card.options} == {"IGNORE", "RESTATE"}

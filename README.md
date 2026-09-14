@@ -2,6 +2,20 @@
 
 自然语言找人 Agent 的 Python 编排服务。
 
+## 演示重点
+
+这个项目优先展示 Agent 开发的核心链路，代码按 Java 开发者容易理解的方式分层：
+
+1. `MessageRouter` 判断闲聊、搜索、修改、翻页、停止和澄清回答。
+2. LLM 只把自然语言转换为 `SearchPlanDraft` 或 `PlanPatch`，不直接调用任意工具。
+3. LangGraph 用固定节点和固定边控制执行顺序。
+4. Python 确定性校验条件；含义不清时返回结构化澄清卡。
+5. `TalentSearchPort` 是 Tool 边界，由 `JavaTalentClient` 调用招聘系统。
+6. 新的有效搜索消息会替代旧 Run；闲聊和进度查询不会打断搜索。
+
+当前是单实例演示版本。只保留一个进程内消息写锁，确保演示打断时两个短暂重叠的
+HTTP 请求不会生成相同消息序号；暂不实现分布式锁、多实例一致性和复杂并发恢复。
+
 V1 将招聘人员的中文自然语言转换为受控、可审计的 `SearchPlan`，并调用 `recruit-social` 的 eTalent/Elasticsearch 搜索能力返回权限内人才。当前支持姓名、候选人职位、最低学历、工作年限、公司、学校、期望工作地、现居住地和院校标签。
 
 V1 不绑定招聘职位，不接收 `positionId`，不进行 JD 解析、人岗匹配、候选人 LLM 评分、向量召回或外部寻源。
@@ -45,10 +59,16 @@ uv run talent-agent-py
 
 服务默认监听 `http://localhost:8000`：
 
+- `GET /`：自然语言找人演示页面。
 - `GET /health`：进程存活检查。
 - `GET /ready`：数据库就绪检查。
 - `GET /docs`：OpenAPI 文档。
 - `GET /metrics`：Prometheus 指标。
+
+打开首页后，点击右上角“连接招聘系统”，填写用户 ID，并粘贴当前登录招聘系统的
+`authOpenIdToken`。页面只创建会话 Cookie，不写入数据库；关闭浏览器会话后自动失效。
+随后可以直接输入自然语言搜索条件，在页面右侧观察 LangGraph 节点执行过程和最终生成的
+招聘接口请求参数。
 
 ## 主要 API
 
@@ -62,8 +82,11 @@ Cookie: authOpenIdToken=<当前用户令牌>
 
 Agent 只提取并透传 `authOpenIdToken`，不会转发其他 Cookie，也不会把令牌写入数据库、日志或 LangGraph 持久化状态。浏览器跨域调用时必须启用凭据发送，并由网关配置允许的来源；更推荐把 Agent 接口反向代理到招聘系统同站域名下。
 
+候选人结果固定按每页 10 条请求和展示；总命中数只用于说明搜索范围，可通过“下一页”继续查看。
+
 ```text
 POST /api/v1/sessions
+GET  /api/v1/sessions
 GET  /api/v1/sessions/{sessionId}
 POST /api/v1/sessions/{sessionId}/messages
 GET  /api/v1/runs/{runId}
@@ -98,6 +121,18 @@ openspec validate build-natural-language-talent-search-v1 --strict
 ```
 
 测试使用 Fake LLM 和 Fake Java，不需要外部服务或真实候选人数据。
+
+## 日志
+
+控制台会输出四类 JSON 日志，中文和业务字段保持可读：
+
+- `HTTP 请求响应`：入站 API 的请求体、响应体、状态码和耗时。
+- `LLM 请求`、`LLM 响应`、`LLM 结构化结果`：提示词、模型原始输出和校验后的对象。
+- `LangGraph 节点开始`、`LangGraph 节点完成`：当前节点、Run 标识和节点输出。
+- `招聘接口请求`、`招聘接口响应`：实际搜索参数和招聘接口业务响应。
+
+Cookie、Authorization、API Key、手机号、邮箱和证件号始终显示为 `***已脱敏***`，
+其他搜索条件、SearchPlan 和候选人安全卡片按明文打印。
 
 ## Java 契约
 

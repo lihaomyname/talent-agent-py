@@ -3,10 +3,8 @@
 import asyncio
 
 import httpx
-
 from fastapi.testclient import TestClient
 
-from talent_agent_py.main import create_app
 from talent_agent_py.application.exceptions import (
     ModelOutputError,
     TalentSearchDeniedError,
@@ -16,7 +14,9 @@ from talent_agent_py.application.ports.talent_search import (
     EntityCandidate,
     EntityResolution,
 )
-from talent_agent_py.domain.enums import EntityResolutionStatus
+from talent_agent_py.domain.enums import EntityResolutionStatus, LocationScope
+from talent_agent_py.domain.plan import LocationCondition, SearchConditions, SearchPlanDraft
+from talent_agent_py.main import create_app
 from talent_agent_py.settings import Settings
 from tests.fakes import FakeLLMClient, FakeTalentSearch
 
@@ -32,6 +32,41 @@ def build_client(tmp_path, llm=None, talent=None):
         talent_search_client=talent or FakeTalentSearch(),
     )
     return TestClient(app)
+
+
+def test_frontend_entry_and_static_assets_are_available(tmp_path):
+    """演示首页和本地静态资源应由同一个 FastAPI 服务提供。"""
+    with build_client(tmp_path) as client:
+        page = client.get("/")
+        script = client.get("/static/app.js")
+        icon_font = client.get("/static/vendor/fonts/bootstrap-icons.woff2")
+
+        assert page.status_code == 200
+        assert "自然语言找人" in page.text
+        assert script.status_code == 200
+        assert icon_font.status_code == 200
+
+
+def test_session_history_is_loaded_from_database_and_isolated_by_user(tmp_path):
+    """重新打开页面后，应能按用户从数据库恢复会话列表。"""
+
+    with build_client(tmp_path) as client:
+        owner_headers = {"X-User-Id": "owner"}
+        other_headers = {"X-User-Id": "other"}
+        session_id = client.post("/api/v1/sessions", headers=owner_headers).json()["session_id"]
+        client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            headers=owner_headers,
+            json={"client_message_id": "history-1", "content": "找Java后端，现居杭州"},
+        )
+
+        owner_history = client.get("/api/v1/sessions", headers=owner_headers)
+        other_history = client.get("/api/v1/sessions", headers=other_headers)
+
+        assert owner_history.status_code == 200
+        assert owner_history.json()[0]["session_id"] == session_id
+        assert owner_history.json()[0]["title"] == "找Java后端，现居杭州"
+        assert other_history.json() == []
 
 
 def test_complete_search_flow(tmp_path):
@@ -54,7 +89,7 @@ def test_complete_search_flow(tmp_path):
         assert body["result"]["candidates"][0]["candidate_id"] == "candidate-1"
         assert talent.last_request.topDegree == "06"
         assert talent.last_request.livePlace == [330100]
-        assert talent.last_request.pageSize == 20
+        assert talent.last_request.pageSize == 10
         assert talent.last_request.hideClue is True
 
 
@@ -86,6 +121,35 @@ def test_location_clarification_round_trip_without_second_llm_parse(tmp_path):
         assert second.status_code == 200, second.text
         assert second.json()["result"]["status"] == "OK"
         assert llm.parse_calls == 1
+
+
+def test_python_forces_clarification_when_model_guesses_bare_city(tmp_path):
+    """模型擅自把裸城市当作现居地时，确定性规则必须阻止搜索。"""
+
+    class GuessingLocationLLM(FakeLLMClient):
+        async def parse_search_draft(self, *, messages):
+            return SearchPlanDraft(conditions=SearchConditions(
+                current_city=LocationCondition(
+                    name="杭州",
+                    scope=LocationScope.CURRENT_CITY,
+                )
+            ))
+
+    talent = FakeTalentSearch()
+    with build_client(tmp_path, llm=GuessingLocationLLM(), talent=talent) as client:
+        headers = {"X-User-Id": "user-1"}
+        session_id = client.post("/api/v1/sessions", headers=headers).json()["session_id"]
+        response = client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            headers=headers,
+            json={"client_message_id": "bare-city", "content": "找杭州的算法工程师"},
+        )
+
+        assert response.status_code == 200
+        result = response.json()["result"]
+        assert result["status"] == "NEEDS_CLARIFICATION"
+        assert result["clarification"]["kind"] == "LOCATION_SCOPE"
+        assert talent.search_calls == 0
 
 
 def test_duplicate_message_does_not_repeat_search(tmp_path):

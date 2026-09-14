@@ -1,8 +1,7 @@
 """会话查询服务。"""
 
 from talent_agent_py.application.exceptions import SessionNotFoundError
-from talent_agent_py.domain.conversation import SessionView, UserContext
-from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
+from talent_agent_py.domain.conversation import SessionSummaryView, SessionView, UserContext
 
 
 class SessionService:
@@ -19,6 +18,22 @@ class SessionService:
                 created_at=record.created_at,
                 updated_at=record.updated_at,
             )
+
+    async def list(self, user: UserContext) -> list[SessionSummaryView]:
+        """从数据库恢复当前用户最近的会话，而不是依赖浏览器缓存。"""
+
+        async with self._uow_factory() as uow:
+            rows = await uow.sessions.list_owned(user.user_id)
+            return [
+                SessionSummaryView(
+                    session_id=record.id,
+                    title=(first_message or "新的人才搜索")[:24],
+                    status=result_status or run_status or "READY",
+                    plan_version=record.current_plan_version,
+                    updated_at=record.updated_at,
+                )
+                for record, first_message, run_status, result_status in rows
+            ]
 
     async def get(self, session_id: str, user: UserContext) -> SessionView:
         async with self._uow_factory() as uow:

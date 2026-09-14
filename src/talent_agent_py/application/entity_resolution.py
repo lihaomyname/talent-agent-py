@@ -58,6 +58,7 @@ async def resolve_draft_entities(
     if not requests:
         return draft
     results = {item.key: item for item in await port.resolve_entities(requests, user)}
+    request_text_by_key = {item.key: item.text for item in requests}
     data = draft.model_dump(mode="python")
     conditions = data["conditions"]
     ambiguities = list(draft.ambiguities)
@@ -75,13 +76,18 @@ async def resolve_draft_entities(
     def resolved_for(key: str) -> ResolvedEntity | None:
         result = results.get(key)
         if result is None:
-            ambiguities.append(Ambiguity(field=key, reason="Java 未返回实体解析结果"))
+            ambiguities.append(Ambiguity(
+                field=key,
+                reason="Java 未返回实体解析结果",
+                input_text=request_text_by_key.get(key),
+            ))
             return None
         entity = _single_entity(result)
         if entity is None:
             ambiguities.append(Ambiguity(
                 field=key,
                 reason="业务实体无法唯一确定",
+                input_text=request_text_by_key.get(key),
                 options=[candidate.label for candidate in result.candidates],
                 entity_options=[
                     ResolvedEntity(code=candidate.code, label=candidate.label)

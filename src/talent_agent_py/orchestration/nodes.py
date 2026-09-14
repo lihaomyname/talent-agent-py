@@ -1,20 +1,25 @@
 """自然语言找人 V1 的 LangGraph 节点。"""
 
-from dataclasses import dataclass
 import time
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import structlog
+from pydantic import ValidationError
 
 from talent_agent_py.application.clarification_service import (
     entity_ambiguity_card,
+    entity_not_found_card,
     intent_card,
     location_scope_card,
     unsupported_condition_card,
 )
 from talent_agent_py.application.entity_resolution import resolve_draft_entities
-from talent_agent_py.application.plan_validation import validate_draft
 from talent_agent_py.application.exceptions import ModelOutputError
+from talent_agent_py.application.plan_validation import (
+    enforce_location_scope_clarification,
+    validate_draft,
+)
 from talent_agent_py.application.ports.llm import LLMClient
 from talent_agent_py.application.ports.talent_search import TalentSearchPort
 from talent_agent_py.application.search_compiler import compile_search_request
@@ -58,6 +63,18 @@ class TalentSearchNodes:
     def __init__(self, dependencies: GraphDependencies) -> None:
         self._deps = dependencies
 
+    @staticmethod
+    def _superseded_result(state: AgentState) -> SearchResult:
+        """为已被替代的旧图生成只读结果，不覆盖最新会话状态。"""
+
+        current_plan = state.get("current_plan")
+        return SearchResult(
+            status=ResultStatus.SUPERSEDED,
+            run_id=state["run_id"],
+            plan_version=current_plan.version if current_plan else 0,
+            message="本轮搜索已被更新的条件替代。",
+        )
+
     async def load_context(self, state: AgentState) -> dict:
         """加载当前计划和尚未被计划吸收的用户消息。"""
 
@@ -96,10 +113,18 @@ class TalentSearchNodes:
             PARSE_OUTCOMES.labels("plan_patch", "success").inc()
             if patch.base_plan_version != current_plan.version:
                 raise ModelOutputError("PlanPatch 基础版本与当前计划不一致")
-            draft = SearchPlanDraft(
-                conditions=apply_plan_patch(current_plan.conditions, patch),
-                unsupported_conditions=patch.unsupported_conditions,
-                ambiguities=patch.ambiguities,
+            try:
+                draft = SearchPlanDraft(
+                    conditions=apply_plan_patch(current_plan.conditions, patch),
+                    unsupported_conditions=patch.unsupported_conditions,
+                    ambiguities=patch.ambiguities,
+                )
+            except ValidationError as exc:
+                raise ModelOutputError("大模型生成的计划修改字段结构不正确") from exc
+            draft = enforce_location_scope_clarification(
+                draft,
+                state["messages"],
+                previous_conditions=current_plan.conditions,
             )
             return {"patch": patch, "draft": draft}
 
@@ -110,6 +135,7 @@ class TalentSearchNodes:
             PARSE_OUTCOMES.labels("search_draft", "error").inc()
             raise
         PARSE_OUTCOMES.labels("search_draft", "success").inc()
+        draft = enforce_location_scope_clarification(draft, state["messages"])
         return {"draft": draft}
 
     async def validate(self, state: AgentState) -> dict:
@@ -147,14 +173,23 @@ class TalentSearchNodes:
                 ResolvedEntity(code=option, label=option)
                 for option in ambiguity.options
             ]
-            card = entity_ambiguity_card(
-                field=ambiguity.field,
-                options=entity_options,
+            card = (
+                entity_ambiguity_card(field=ambiguity.field, options=entity_options)
+                if entity_options
+                else entity_not_found_card(
+                    field=ambiguity.field,
+                    input_text=ambiguity.input_text,
+                )
             )
         else:
             card = intent_card()
 
         async with self._deps.uow_factory() as uow:
+            session_record = await uow.sessions.get_owned(
+                state["session_id"], state["user"].user_id
+            )
+            if session_record is None or session_record.active_run_id != state["run_id"]:
+                return {"result": self._superseded_result(state)}
             await uow.clarifications.save(
                 state["session_id"],
                 state["trigger_message_sequence"],
@@ -262,12 +297,18 @@ class TalentSearchNodes:
             status=status,
             run_id=state["run_id"],
             plan_version=plan.version,
+            page=state["search_request"].currentPage,
             candidates=response.candidates,
             total=response.total,
             next_page=next_page,
             executed_conditions=plan.conditions,
         )
         async with self._deps.uow_factory() as uow:
+            session_record = await uow.sessions.get_owned(
+                state["session_id"], state["user"].user_id
+            )
+            if session_record is None or session_record.active_run_id != state["run_id"]:
+                return {"result": self._superseded_result(state)}
             await uow.runs.update(
                 state["run_id"],
                 status=RunStatus.SUCCEEDED,

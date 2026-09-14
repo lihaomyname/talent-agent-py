@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -91,8 +100,10 @@ class RunRecord(Base):
     session_id: Mapped[str] = mapped_column(
         ForeignKey("agent_sessions.id", ondelete="CASCADE"), index=True, comment="所属会话标识"
     )
-    trigger_message_sequence: Mapped[int] = mapped_column(
-        BigInteger, comment="触发本次运行的消息序号"
+    trigger_message_sequence: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="触发本次运行的消息序号；直接翻页等系统动作为空",
     )
     status: Mapped[str] = mapped_column(
         String(40),
@@ -110,7 +121,8 @@ class RunRecord(Base):
         comment=(
             "结果状态：OK=有结果，EMPTY=无结果，UNSUPPORTED=条件不支持，"
             "NEEDS_CLARIFICATION=待澄清，DENIED=无权限，MODEL_ERROR=模型错误，"
-            "DEPENDENCY_ERROR=依赖错误，CANCELLED=已取消，SUPERSEDED=已被替代"
+            "DEPENDENCY_ERROR=依赖错误，INTERNAL_ERROR=内部错误，CANCELLED=已取消，"
+            "SUPERSEDED=已被替代"
         ),
     )
     error_code: Mapped[str | None] = mapped_column(
@@ -177,7 +189,7 @@ class PendingClarificationRecord(Base):
         JSON,
         comment=(
             "澄清卡快照；kind 可为 LOCATION_SCOPE、POSITION_SCOPE、COMPANY_SCOPE、"
-            "ENTITY_AMBIGUITY、UNSUPPORTED_CONDITION、MESSAGE_INTENT"
+            "ENTITY_AMBIGUITY、ENTITY_NOT_FOUND、UNSUPPORTED_CONDITION、MESSAGE_INTENT"
         ),
     )
     draft_json: Mapped[dict | None] = mapped_column(

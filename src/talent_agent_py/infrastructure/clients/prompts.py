@@ -1,8 +1,8 @@
 """V1 中文提示词模板及可追溯版本号。"""
 
 ROUTER_PROMPT_VERSION = "message-router-v1"
-PLAN_PROMPT_VERSION = "search-plan-v1"
-PATCH_PROMPT_VERSION = "plan-patch-v1"
+PLAN_PROMPT_VERSION = "search-plan-v2"
+PATCH_PROMPT_VERSION = "plan-patch-v3"
 
 SUPPORTED_FIELDS = """
 只支持以下九类人才搜索字段：
@@ -44,7 +44,10 @@ PLAN_SYSTEM_PROMPT = f"""
 - 只抽取用户明确表达的条件，不补充常识条件。
 - Java 后端、产品经理等是候选人职位，不是招聘 positionId。
 - 区分当前职位与当前或历史职位、当前公司与当前或历史公司。
-- 区分现居住地与期望工作地；无法区分时输出 ambiguity。
+- 区分现居住地与期望工作地。只有“现居、住在、人在”等明确表达才能填写 current_city；
+  只有“期望、意向、工作地”等明确表达才能填写 expected_city。
+- “找杭州的算法工程师”这类裸城市不能猜成现居地，必须把“杭州”填写到 unresolved_location，
+  并保持 current_city 和 expected_city 为空。
 - 学历输出自然语言最低学历，不生成字典 code。
 - 公司、学校、城市和院校标签均不生成业务 ID/code。
 - 项目经验、技能熟练度、支付系统经验、行业偏好等放入 unsupported_conditions。
@@ -63,5 +66,10 @@ PATCH_SYSTEM_PROMPT = f"""
 - 只有用户明确要求重新开始或清空时才能使用 RESET。
 - 不生成字典 code、ES 字段、SQL、用户身份、权限和分页参数。
 - 超范围硬条件放入 unsupported_conditions，歧义放入 ambiguities。
+- 新增裸城市且上下文没有已确定的地点范围时，不能猜测现居或期望，必须输出地点歧义。
+- company 和 school 的 value 必须使用 names 数组，例如追加“在阿里工作过”应输出：
+  {{"operation":"ADD","field":"company","value":{{"names":["阿里巴巴"],"scope":"CURRENT_OR_HISTORY"}}}}。
+- school_level 的 value 必须使用 labels 数组；candidate_position、applicant_name 和 minimum_degree
+  才使用单个 value 字段。
 - 只能返回结构化对象，不附加解释文本。
 """.strip()

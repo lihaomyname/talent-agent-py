@@ -8,7 +8,6 @@ from talent_agent_py.domain.enums import MessageType
 from talent_agent_py.domain.plan import SearchConditions, SearchPlan
 from tests.fakes import FakeLLMClient
 
-
 CASES_PATH = Path(__file__).with_name("cases.json")
 
 

@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, status
 
 from talent_agent_py.api.dependencies import (
     get_agent_service,
@@ -16,6 +16,7 @@ from talent_agent_py.domain.conversation import (
     MessageOutcome,
     RunView,
     SearchResult,
+    SessionSummaryView,
     SessionView,
     UserContext,
 )
@@ -32,6 +33,13 @@ async def create_session(user: UserDep, service: SessionServiceDep) -> SessionVi
     """创建当前用户拥有的空搜索会话。"""
 
     return await service.create(user)
+
+
+@router.get("/sessions", response_model=list[SessionSummaryView])
+async def list_sessions(user: UserDep, service: SessionServiceDep) -> list[SessionSummaryView]:
+    """读取当前用户最近的历史会话。"""
+
+    return await service.list(user)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionView)

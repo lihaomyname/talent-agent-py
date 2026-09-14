@@ -59,7 +59,8 @@ class TalentSearchRequest(StrictModel):
     schoolLevelList: list[FieldValue] = Field(default_factory=list, max_length=20)
     firstDegree: bool = False
     currentPage: int = Field(default=1, ge=1)
-    pageSize: int = Field(default=20, ge=1, le=100)
+    # 分页大小由 Agent 控制，调用方和模型都不能扩大到 10 条以上。
+    pageSize: int = Field(default=10, ge=1, le=10)
     sortType: int = 1
     keyWordsMatchType: str = Field(default="ALL", pattern="^(ALL|ANY)$")
     inFlow: bool = True
@@ -69,7 +70,7 @@ class TalentSearchRequest(StrictModel):
 class TalentSearchResponse(StrictModel):
     """Java 返回的安全人才卡及分页信息。"""
 
-    candidates: list[CandidateCard] = Field(default_factory=list)
+    candidates: list[CandidateCard] = Field(default_factory=list, max_length=10)
     total: int = Field(ge=0)
     has_next: bool = False
 

@@ -72,6 +72,7 @@ class MessageRouter:
                 affects_active_run=False,
                 confidence=1.0,
                 reason_code="PAGE_RULE",
+                page_delta=-1 if text == "上一页" else 1,
             )
         if any(marker in text for marker in self._NEW_MARKERS):
             return MessageRoute(

@@ -1,6 +1,7 @@
 """Java eTalent 内部接口适配器。"""
 
 import httpx
+import structlog
 
 from talent_agent_py.application.exceptions import (
     TalentSearchDeniedError,
@@ -14,9 +15,12 @@ from talent_agent_py.application.ports.talent_search import (
     TalentSearchRequest,
     TalentSearchResponse,
 )
-from talent_agent_py.domain.conversation import UserContext
+from talent_agent_py.domain.conversation import CandidateCard, UserContext
 from talent_agent_py.domain.enums import EntityKind, EntityResolutionStatus
 from talent_agent_py.settings import Settings
+from talent_agent_py.telemetry import sanitize_log_value
+
+logger = structlog.get_logger(__name__)
 
 
 class JavaTalentClient(TalentSearchPort):
@@ -37,6 +41,14 @@ class JavaTalentClient(TalentSearchPort):
     def __init__(self, http_client: httpx.AsyncClient, settings: Settings) -> None:
         self._http = http_client
         self._settings = settings
+        if settings.java_requires_user_cookie:
+            base_url = self._http.base_url
+            if (
+                base_url.scheme != "https"
+                or base_url.host != settings.java_cookie_allowed_host
+                or base_url.port not in {None, 443}
+            ):
+                raise ValueError("招聘 Cookie 只能发送到白名单 HTTPS 标准端口")
 
     def _headers(self, user: UserContext) -> dict[str, str]:
         headers = {"X-Effective-User-Id": user.user_id, "X-Trace-Id": user.trace_id or ""}
@@ -57,21 +69,54 @@ class JavaTalentClient(TalentSearchPort):
         return headers
 
     async def _post(self, path: str, payload: object, user: UserContext) -> object:
+        headers = self._headers(user)
+        logger.info(
+            "招聘接口请求",
+            method="POST",
+            url=str(self._http.base_url.join(path)),
+            headers=sanitize_log_value(headers),
+            payload=sanitize_log_value(payload),
+        )
         try:
-            response = await self._http.post(path, json=payload, headers=self._headers(user))
+            response = await self._http.post(path, json=payload, headers=headers)
         except httpx.HTTPError as exc:
+            logger.exception("招聘接口网络异常", method="POST", path=path)
             raise TalentSearchDependencyError("Java 人才服务网络异常") from exc
 
-        return self._decode_response(response)
+        data = self._decode_response(response)
+        logger.info(
+            "招聘接口响应",
+            method="POST",
+            path=path,
+            status_code=response.status_code,
+            response=sanitize_log_value(data),
+        )
+        return data
 
     async def _get(self, path: str, user: UserContext) -> object:
         """使用同一白名单 Cookie 调用招聘系统的字典读取接口。"""
 
+        headers = self._headers(user)
+        logger.info(
+            "招聘接口请求",
+            method="GET",
+            url=str(self._http.base_url.join(path)),
+            headers=sanitize_log_value(headers),
+        )
         try:
-            response = await self._http.get(path, headers=self._headers(user))
+            response = await self._http.get(path, headers=headers)
         except httpx.HTTPError as exc:
+            logger.exception("招聘接口网络异常", method="GET", path=path)
             raise TalentSearchDependencyError("Java 人才服务网络异常") from exc
-        return self._decode_response(response)
+        data = self._decode_response(response)
+        logger.info(
+            "招聘接口响应",
+            method="GET",
+            path=path,
+            status_code=response.status_code,
+            response=sanitize_log_value(data),
+        )
+        return data
 
     @staticmethod
     def _decode_response(response: httpx.Response) -> object:
@@ -91,7 +136,8 @@ class JavaTalentClient(TalentSearchPort):
 
         # 兼容 recruit-social 的 Result<T> 包装，同时保留内部窄接口直返格式。
         if isinstance(body, dict) and "code" in body and "data" in body:
-            code = body.get("code")
+            raw_code = body.get("code")
+            code = int(raw_code) if str(raw_code).isdigit() else raw_code
             if code in {401, 403}:
                 raise TalentSearchDeniedError("招聘系统登录已失效或无人才库权限")
             if code != 200:
@@ -102,10 +148,8 @@ class JavaTalentClient(TalentSearchPort):
         return body
 
     @staticmethod
-    def _candidate_card(item: dict) -> "CandidateCard":
+    def _candidate_card(item: dict) -> CandidateCard:
         """把宽版 TalentResumeVO 收敛为不含联系方式的安全候选人卡片。"""
-
-        from talent_agent_py.domain.conversation import CandidateCard
 
         raw_id = item.get("id") or item.get("applicantId")
         if raw_id is None:
@@ -170,10 +214,12 @@ class JavaTalentClient(TalentSearchPort):
                 if code:
                     candidates.append(EntityCandidate(code=code, label=item.text.strip()))
             elif item.kind is EntityKind.CITY:
+                requested_city = self._normalize_city_name(item.text)
                 candidates.extend(
                     EntityCandidate(code=str(option["id"]), label=str(option["name"]))
                     for option in city_items
-                    if str(option.get("name", "")).strip() == item.text.strip()
+                    if self._normalize_city_name(str(option.get("name", "")))
+                    == requested_city
                     and option.get("id") is not None
                 )
             else:
@@ -195,6 +241,13 @@ class JavaTalentClient(TalentSearchPort):
             ))
         return results
 
+    @staticmethod
+    def _normalize_city_name(value: str) -> str:
+        """允许“杭州”和字典中的“杭州市”稳定匹配。"""
+
+        normalized = value.strip()
+        return normalized[:-1] if normalized.endswith("市") else normalized
+
     async def search_candidates(
         self, request: TalentSearchRequest, user: UserContext
     ) -> TalentSearchResponse:
@@ -203,22 +256,30 @@ class JavaTalentClient(TalentSearchPort):
             request.model_dump(mode="json", exclude_none=True),
             user,
         )
+        if data is None:
+            raise TalentSearchDependencyError("招聘接口成功响应缺少分页数据")
         if isinstance(data, dict) and "list" in data:
             # 浏览器人才库接口返回 PageResult<TalentResumeVO>。
             items = data.get("list") or []
             if not isinstance(items, list):
                 raise TalentSearchDependencyError("招聘接口分页列表格式错误")
+            # 即使上游忽略 pageSize，也只接收本页允许的前 10 条安全卡片。
             candidates = [
                 self._candidate_card(item)
-                for item in items
+                for item in items[: request.pageSize]
                 if isinstance(item, dict)
             ]
             last_page = data.get("lastPage", data.get("isLastPage"))
-            if last_page is None:
+            if not isinstance(last_page, bool):
                 last_page = request.currentPage >= int(data.get("pages") or 0)
             return TalentSearchResponse(
                 candidates=candidates,
                 total=int(data.get("total") or 0),
                 has_next=not bool(last_page),
             )
+        if isinstance(data, dict) and isinstance(data.get("candidates"), list):
+            data = {
+                **data,
+                "candidates": data["candidates"][: request.pageSize],
+            }
         return TalentSearchResponse.model_validate(data, strict=False)

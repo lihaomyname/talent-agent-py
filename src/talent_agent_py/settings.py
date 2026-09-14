@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     java_requires_user_cookie: bool = False
     java_direct_browser_api: bool = False
 
-    default_page_size: int = Field(default=20, ge=1, le=100)
+    # 演示页面每次只展示 10 位候选人，避免大结果集影响响应和讲解。
+    default_page_size: int = Field(default=10, ge=1, le=10)
     default_sort_type: int = 1
     default_keywords_match_type: str = "ALL"
     default_in_flow: bool = True

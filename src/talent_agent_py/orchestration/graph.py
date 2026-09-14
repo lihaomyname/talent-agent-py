@@ -1,9 +1,48 @@
 """自然语言找人 V1 固定状态图。"""
 
+from collections.abc import Awaitable, Callable
+
+import structlog
 from langgraph.graph import END, START, StateGraph
 
 from talent_agent_py.orchestration.nodes import GraphDependencies, TalentSearchNodes
 from talent_agent_py.orchestration.state import AgentState
+from talent_agent_py.telemetry import sanitize_log_value
+
+logger = structlog.get_logger(__name__)
+
+
+def _with_node_log(
+    node_name: str,
+    node: Callable[[AgentState], Awaitable[dict]],
+) -> Callable[[AgentState], Awaitable[dict]]:
+    """统一包装节点进入、完成和异常日志，避免每个节点重复写模板代码。"""
+
+    async def logged_node(state: AgentState) -> dict:
+        common = {
+            "node": node_name,
+            "session_id": state.get("session_id"),
+            "run_id": state.get("run_id"),
+        }
+        logger.info("LangGraph 节点开始", **common)
+        try:
+            output = await node(state)
+        except BaseException as exc:
+            logger.warning(
+                "LangGraph 节点结束（异常）",
+                **common,
+                exception_type=type(exc).__name__,
+                exception_message=str(exc),
+            )
+            raise
+        logger.info(
+            "LangGraph 节点完成",
+            **common,
+            output=sanitize_log_value(output),
+        )
+        return output
+
+    return logged_node
 
 
 def _after_validation(state: AgentState) -> str:
@@ -27,15 +66,21 @@ def build_graph(dependencies: GraphDependencies):
 
     nodes = TalentSearchNodes(dependencies)
     graph = StateGraph(AgentState)
-    graph.add_node("load_context", nodes.load_context)
-    graph.add_node("parse_plan", nodes.parse_plan)
-    graph.add_node("validate", nodes.validate)
-    graph.add_node("resolve_entities", nodes.resolve_entities)
-    graph.add_node("clarify", nodes.clarify)
-    graph.add_node("save_plan", nodes.save_plan)
-    graph.add_node("compile_search", nodes.compile_search)
-    graph.add_node("search_candidates", nodes.search_candidates)
-    graph.add_node("finalize", nodes.finalize)
+    graph.add_node("load_context", _with_node_log("load_context", nodes.load_context))
+    graph.add_node("parse_plan", _with_node_log("parse_plan", nodes.parse_plan))
+    graph.add_node("validate", _with_node_log("validate", nodes.validate))
+    graph.add_node(
+        "resolve_entities", _with_node_log("resolve_entities", nodes.resolve_entities)
+    )
+    graph.add_node("clarify", _with_node_log("clarify", nodes.clarify))
+    graph.add_node("save_plan", _with_node_log("save_plan", nodes.save_plan))
+    graph.add_node(
+        "compile_search", _with_node_log("compile_search", nodes.compile_search)
+    )
+    graph.add_node(
+        "search_candidates", _with_node_log("search_candidates", nodes.search_candidates)
+    )
+    graph.add_node("finalize", _with_node_log("finalize", nodes.finalize))
 
     graph.add_edge(START, "load_context")
     graph.add_edge("load_context", "parse_plan")

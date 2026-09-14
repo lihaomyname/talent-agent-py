@@ -40,6 +40,7 @@ class ResultStatus(StrEnum):
     DEPENDENCY_ERROR = "DEPENDENCY_ERROR"  # Java、ES 或其他依赖异常。
     CANCELLED = "CANCELLED"  # 用户明确停止本轮运行。
     SUPERSEDED = "SUPERSEDED"  # 本轮被更新消息替代。
+    INTERNAL_ERROR = "INTERNAL_ERROR"  # 未分类的服务端内部异常。
 
 
 class ExperienceScope(StrEnum):
@@ -94,6 +95,7 @@ class ClarificationKind(StrEnum):
     POSITION_SCOPE = "POSITION_SCOPE"  # 当前职位与当前或历史职位之间的选择。
     COMPANY_SCOPE = "COMPANY_SCOPE"  # 当前公司与当前或历史公司之间的选择。
     ENTITY_AMBIGUITY = "ENTITY_AMBIGUITY"  # Java 返回多个可能的业务实体。
+    ENTITY_NOT_FOUND = "ENTITY_NOT_FOUND"  # Java 未找到可执行的业务实体。
     UNSUPPORTED_CONDITION = "UNSUPPORTED_CONDITION"  # V1 无法执行某项条件。
     MESSAGE_INTENT = "MESSAGE_INTENT"  # 用户这句话的会话意图不明确。
 
