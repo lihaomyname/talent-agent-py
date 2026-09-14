@@ -212,11 +212,45 @@ def apply_plan_patch(current: SearchConditions, patch: PlanPatch) -> SearchCondi
 
         model_type = _FIELD_MODEL[operation.field]
         normalized_value = _normalize_patch_value(operation.field, operation.value)
+        if (
+            operation.operation is PatchOperation.ADD
+            and operation.field in _LIST_FIELD_KEYS
+            and isinstance(values.get(key), dict)
+        ):
+            # ADD 在列表字段上与现有值合并，模型只需要提供新增的值。
+            normalized_value = _merge_add_value(operation.field, values[key], normalized_value)
         values[key] = model_type.model_validate(
             normalized_value, strict=False
         ).model_dump(mode="python")
 
     return SearchConditions.model_validate(values)
+
+
+_LIST_FIELD_KEYS = {
+    SupportedField.COMPANY: "names",
+    SupportedField.SCHOOL: "names",
+    SupportedField.SCHOOL_LEVEL: "labels",
+}
+
+
+def _merge_add_value(
+    field: SupportedField, existing: dict, incoming: dict
+) -> dict:
+    """列表字段的 ADD 取并集，未提及的属性保持原值。"""
+
+    list_key = _LIST_FIELD_KEYS[field]
+    existing_values = list(existing.get(list_key) or [])
+    incoming_values = list(incoming.get(list_key) or [])
+    merged = dict(existing)
+    merged[list_key] = existing_values + [
+        value for value in incoming_values if value not in existing_values
+    ]
+    if field is SupportedField.SCHOOL_LEVEL:
+        # 第一学历限制只要表达过就保留，不能因为追加普通标签而丢失。
+        merged["first_degree_only"] = bool(existing.get("first_degree_only")) or bool(
+            incoming.get("first_degree_only", False)
+        )
+    return merged
 
 
 def _normalize_patch_value(field: SupportedField, value: JsonValue | None) -> JsonValue | None:

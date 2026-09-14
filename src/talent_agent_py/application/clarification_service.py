@@ -174,7 +174,13 @@ def apply_entity_answer(
     field = card.field
 
     if field == "minimum_degree":
-        data["conditions"]["minimum_degree"]["resolved"] = entity.model_dump(mode="python")
+        # 模糊学历的选项来自模型而非 Java，写回自然语言值并等待重新解析为权威 code。
+        condition = data["conditions"].get("minimum_degree")
+        if condition is None:
+            data["conditions"]["minimum_degree"] = {"value": selected.label}
+        else:
+            condition["value"] = selected.label
+            condition["resolved"] = None
     elif field in {"current_city", "expected_city"}:
         data["conditions"][field]["resolved"] = entity.model_dump(mode="python")
     elif ":" in field:

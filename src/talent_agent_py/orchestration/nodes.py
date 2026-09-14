@@ -120,7 +120,13 @@ class TalentSearchNodes:
                     ambiguities=patch.ambiguities,
                 )
             except ValidationError as exc:
-                raise ModelOutputError("大模型生成的计划修改字段结构不正确") from exc
+                details = "；".join(
+                    f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                    for error in exc.errors()[:3]
+                )
+                raise ModelOutputError(
+                    f"大模型生成的计划修改字段结构不正确：{details}"
+                ) from exc
             draft = enforce_location_scope_clarification(
                 draft,
                 state["messages"],
