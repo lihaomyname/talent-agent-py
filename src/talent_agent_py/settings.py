@@ -35,7 +35,12 @@ class Settings(BaseSettings):
     java_service_token: SecretStr | None = None
     java_resolve_path: str = "/internal/agent/search/resolve-entities"
     java_search_path: str = "/internal/agent/search/candidates"
+    java_city_options_path: str = "/api/eTalent/option/city"
     java_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    java_user_cookie_name: str = "authOpenIdToken"
+    java_cookie_allowed_host: str = "zhaopin.netease.com"
+    java_requires_user_cookie: bool = False
+    java_direct_browser_api: bool = False
 
     default_page_size: int = Field(default=20, ge=1, le=100)
     default_sort_type: int = 1

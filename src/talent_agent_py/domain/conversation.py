@@ -4,7 +4,7 @@ from datetime import datetime
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from talent_agent_py.domain.base import StrictModel
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
@@ -12,11 +12,17 @@ from talent_agent_py.domain.plan import SearchConditions, SearchPlan
 
 
 class UserContext(StrictModel):
-    """由网关传入的可信身份，禁止来自模型输出。"""
+    """请求级可信身份和临时凭据，禁止来自模型输出或持久化。"""
 
     user_id: str = Field(min_length=1, max_length=128)
     tenant_id: str | None = Field(default=None, max_length=128)
     trace_id: str | None = Field(default=None, max_length=128)
+    auth_open_id_token: SecretStr | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+        description="仅用于当前请求透传的招聘系统登录令牌",
+    )
 
 
 class MessageRoute(StrictModel):

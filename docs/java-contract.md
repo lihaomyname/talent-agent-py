@@ -1,13 +1,17 @@
 # Java eTalent 接口契约假设
 
-Python 侧定义两个内部操作：
+Python 侧保留实体解析操作，并直接复用现有招聘人才分页接口：
 
 ```text
 POST /internal/agent/search/resolve-entities
-POST /internal/agent/search/candidates
+POST https://zhaopin.netease.com/api/eTalent/talent/list/page
 ```
 
-Java 侧必须根据服务凭证中的有效用户重新鉴权，不能信任普通请求体中的操作人字段。
+人才分页接口通过当前用户的 `authOpenIdToken` Cookie 鉴权。Python 只允许将该 Cookie 透传到配置的招聘域名，不在配置、数据库或日志中保存令牌，也不信任普通请求体中的操作人字段。
+
+实际响应为 `Result<PageResult<TalentResumeVO>>`。Python 会解包 `code/data`，读取 `data.list/total/pages/lastPage`，并把宽版 `TalentResumeVO` 收敛为安全候选人卡片；手机号、邮箱、证件号、微信等字段不会进入 Agent 结果。
+
+直连模式下，城市通过 `GET /api/eTalent/option/city` 获取权威 ID；学历编码与 `SocialDegreeTypeEnum` 保持一致；公司、学校和院校级别以 `TEXT` 名称交给 `TalentController.convertText2Label` 使用现有标签能力转换。后续若建设专用 `resolve-entities` 接口，可关闭 `TALENT_AGENT_JAVA_DIRECT_BROWSER_API` 恢复统一解析端口。
 
 ## 已按现有源码实现的映射
 

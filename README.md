@@ -54,6 +54,14 @@ uv run talent-agent-py
 
 所有业务接口要求受信网关注入 `X-User-Id`，可选传入 `X-Tenant-Id` 和 `X-Trace-Id`。请求体不接受 `operatorId`。
 
+调用人才搜索时，客户端还需要把当前登录态 Cookie 一并发送给 Agent：
+
+```http
+Cookie: authOpenIdToken=<当前用户令牌>
+```
+
+Agent 只提取并透传 `authOpenIdToken`，不会转发其他 Cookie，也不会把令牌写入数据库、日志或 LangGraph 持久化状态。浏览器跨域调用时必须启用凭据发送，并由网关配置允许的来源；更推荐把 Agent 接口反向代理到招聘系统同站域名下。
+
 ```text
 POST /api/v1/sessions
 GET  /api/v1/sessions/{sessionId}
