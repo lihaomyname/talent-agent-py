@@ -1,0 +1,48 @@
+[project]
+name = "talent-agent-py"
+version = "0.1.0"
+description = "Controlled natural-language talent search orchestration service"
+readme = "README.md"
+authors = [
+    { name = "lihao05", email = "lihao05@corp.netease.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.21.0",
+    "alembic>=1.16.0",
+    "asyncmy>=0.2.14",
+    "asyncpg>=0.30.0",
+    "cryptography>=46.0.0",
+    "fastapi>=0.116.0",
+    "httpx>=0.28.0",
+    "langchain-openai>=1.0.0",
+    "langgraph>=1.0.0",
+    "prometheus-client>=0.22.0",
+    "pydantic-settings>=2.10.0",
+    "sqlalchemy[asyncio]>=2.0.40",
+    "structlog>=25.4.0",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[project.scripts]
+talent-agent-py = "talent_agent_py.main:run"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.1.0",
+    "respx>=0.22.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
