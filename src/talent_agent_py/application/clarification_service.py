@@ -1,6 +1,9 @@
 """固定澄清卡模板及结构化答案应用逻辑。"""
 
+import re
 from uuid import uuid4
+
+from pydantic import ValidationError
 
 from talent_agent_py.application.exceptions import InvalidClarificationAnswerError
 from talent_agent_py.domain.conversation import (
@@ -14,6 +17,7 @@ from talent_agent_py.domain.plan import (
     ResolvedEntity,
     SearchPlanDraft,
     UnsupportedCondition,
+    WorkYearsCondition,
 )
 
 
@@ -89,7 +93,8 @@ def entity_ambiguity_card(
         question_id=_question_id(),
         kind=ClarificationKind.ENTITY_AMBIGUITY,
         field=field,
-        title="找到多个可能的业务实体，请选择你想要的一个。",
+        title=("请选择工作年限范围。" if field == "work_years"
+               else "找到多个可能的业务实体，请选择你想要的一个。"),
         options=[
             ClarificationOption(value=option.code, label=option.label)
             for option in options
@@ -175,7 +180,10 @@ def apply_entity_answer(
     data = draft.model_dump(mode="python")
     field = card.field
 
-    if field == "minimum_degree":
+    if field == "work_years":
+        # 兼容已保存的年限澄清卡；选项文本是年限含义，不是业务实体编码。
+        data["conditions"][field] = parse_work_years_option(selected.label).model_dump(mode="python")
+    elif field == "minimum_degree":
         # 模糊学历的选项来自模型而非 Java，写回自然语言值并等待重新解析为权威 code。
         condition = data["conditions"].get("minimum_degree")
         if condition is None:
@@ -194,3 +202,25 @@ def apply_entity_answer(
 
     data["ambiguities"] = [item for item in data["ambiguities"] if item["field"] != field]
     return SearchPlanDraft.model_validate(data)
+
+
+def parse_work_years_option(text: str) -> WorkYearsCondition:
+    """将明确的年限选项转换为范围；不猜测无法识别的选项含义。"""
+
+    normalized = re.sub(r"\s+", "", text)
+    lower = re.fullmatch(r"([0-9]+)年以上", normalized)
+    upper = re.fullmatch(r"([0-9]+)年(?:以内|以下)", normalized)
+    interval = re.fullmatch(r"([0-9]+)(?:-|–|—|~|～|至|到)([0-9]+)年", normalized)
+    exact = re.fullmatch(r"(?:恰好|正好)([0-9]+)年", normalized)
+    try:
+        if lower:
+            return WorkYearsCondition(minimum=int(lower[1]))
+        if upper:
+            return WorkYearsCondition(maximum=int(upper[1]))
+        if interval:
+            return WorkYearsCondition(minimum=int(interval[1]), maximum=int(interval[2]))
+        if exact:
+            return WorkYearsCondition(minimum=int(exact[1]), maximum=int(exact[1]))
+    except ValidationError as exc:
+        raise InvalidClarificationAnswerError("工作年限范围无效，请重新描述条件") from exc
+    raise InvalidClarificationAnswerError("无法识别该年限选项，请输入明确范围，如 5年以上")

@@ -443,3 +443,43 @@ def test_disabled_feature_returns_service_unavailable(tmp_path):
         )
         assert response.status_code == 503
         assert response.json()["code"] == "FEATURE_DISABLED"
+
+
+def test_work_years_clarification_resumes_search(tmp_path):
+    """复现年限卡点击失败；回答后保留职位、解析学历，并执行搜索。"""
+    from talent_agent_py.domain.plan import Ambiguity, DegreeCondition, PositionCondition
+
+    class YearsLLM(FakeLLMClient):
+        async def parse_search_draft(self, *, messages):
+            return SearchPlanDraft(
+                conditions=SearchConditions(
+                    candidate_position=PositionCondition(value="Java"),
+                    minimum_degree=DegreeCondition(value="本科"),
+                ),
+                ambiguities=[Ambiguity(
+                    field="work_years", reason="年限方向未确定",
+                    options=["5年以上", "5年以内"],
+                )],
+            )
+
+    talent = FakeTalentSearch()
+    with build_client(tmp_path, llm=YearsLLM(), talent=talent) as client:
+        headers = {"X-User-Id": "years-user"}
+        for index, selected in enumerate(["5年以上", "5年以内"]):
+            session_id = client.post("/api/v1/sessions", headers=headers).json()["session_id"]
+            url = f"/api/v1/sessions/{session_id}/messages"
+            first = client.post(url, headers=headers, json={
+                "client_message_id": f"first-{index}", "content": "找五年经验，Java，本科",
+            })
+            assert first.status_code == 200, first.text
+            card = first.json()["result"]["clarification"]
+            answer = client.post(url, headers=headers, json={
+                "client_message_id": f"answer-{index}", "content": selected,
+                "clarification_answer": {"question_id": card["question_id"], "value": selected},
+            })
+            assert answer.status_code == 200, answer.text
+            assert answer.json()["result"]["status"] == "OK"
+            assert talent.last_request.nowPosition == "Java"
+            assert talent.last_request.topDegree == "06"
+            assert talent.last_request.workYearsMin == (5 if index == 0 else None)
+            assert talent.last_request.workYearsMax == (None if index == 0 else 5)

@@ -117,3 +117,12 @@ def test_prompts_require_closed_options_for_vague_degree():
     for prompt in (PLAN_SYSTEM_PROMPT, PATCH_SYSTEM_PROMPT):
         assert "学历高" in prompt
         assert '"本科", "硕士", "博士"' in prompt
+
+
+@pytest.mark.parametrize("text", ["61年以上", "8-5年", "经验丰富", "5年"])
+def test_work_years_option_rejects_invalid_or_ambiguous_range(text):
+    """不把非法或仍有歧义的选项猜测成可执行条件。"""
+    from talent_agent_py.application.clarification_service import parse_work_years_option
+
+    with pytest.raises(InvalidClarificationAnswerError):
+        parse_work_years_option(text)

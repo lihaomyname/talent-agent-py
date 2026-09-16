@@ -268,8 +268,8 @@ class AgentService:
                 return apply_location_answer(draft, card, answer), False
             if card.kind is ClarificationKind.ENTITY_AMBIGUITY:
                 # 草稿中的其他解析结果同样来自上一次 Java 调用，可跳过重复解析；
-                # 学历的选项来自模型而非 Java，写回的是自然语言值，需要重新解析。
-                entities_resolved = card.field != "minimum_degree"
+                # 学历和年限是模型产生的语义澄清，其他实体可能尚未解析，需要继续解析。
+                entities_resolved = card.field not in {"minimum_degree", "work_years"}
                 return apply_entity_answer(draft, card, answer), entities_resolved
             if card.kind is ClarificationKind.UNSUPPORTED_CONDITION:
                 if answer.value != "IGNORE":
