@@ -1,5 +1,6 @@
 """FastAPI 应用工厂和进程生命周期。"""
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -45,10 +46,12 @@ def create_app(
     settings = settings or get_settings()
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """启动时组装数据库、客户端和 Graph，退出时关闭客户端与连接池。"""
+
         database = Database(settings.database_url, echo=settings.database_echo)
         if settings.auto_create_schema:
-            # 仅供测试和本地演示；正式环境必须通过 Alembic 迁移建表。
+            # 仅供测试和本地开发；正式环境必须通过 Alembic 迁移建表。
             async with database.engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
         http_client = httpx.AsyncClient(
@@ -103,7 +106,7 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     async def conversation_page() -> FileResponse:
-        """返回无需单独构建的 Agent 演示页面。"""
+        """返回无需单独构建的 Agent 会话页面。"""
 
         return FileResponse(STATIC_DIR / "index.html")
 

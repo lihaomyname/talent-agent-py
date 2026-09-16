@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -29,23 +30,33 @@ class SessionRepository:
     """创建和读取用户拥有的会话。"""
 
     def __init__(self, session: AsyncSession) -> None:
+        """绑定事务单元提供的数据库会话，写操作只 flush，不自行提交事务。"""
+
+        # 外部事务单元提供的会话；仓储不负责 commit 或 close。
         self.session = session
 
     async def create(self, owner_user_id: str) -> AgentSessionRecord:
+        """创建记录并 flush，使调用方立即取得标识；最终提交由事务单元负责。"""
+
         record = AgentSessionRecord(id=new_id("ses"), owner_user_id=owner_user_id)
         self.session.add(record)
         await self.session.flush()
         return record
 
     async def get_owned(self, session_id: str, owner_user_id: str) -> AgentSessionRecord | None:
+        """按会话 ID 和用户归属查找记录；未找到返回 None。"""
+
         query = select(AgentSessionRecord).where(
             AgentSessionRecord.id == session_id,
             AgentSessionRecord.owner_user_id == owner_user_id,
         )
         return await self.session.scalar(query)
 
-    async def list_owned(self, owner_user_id: str, *, limit: int = 20) -> list[tuple]:
-        """按最近更新时间返回用户会话，并附带首条消息和当前运行状态。"""
+    async def list_owned(self, owner_user_id: str, *, limit: int = 20) -> list[tuple[AgentSessionRecord, str | None, str | None, str | None]]:
+        """按最近更新时间返回会话列表。
+
+        每项依次为（会话记录、首条消息、运行状态、结果状态）；后三项可为空。
+        """
 
         first_message = (
             select(MessageRecord.content)
@@ -74,11 +85,16 @@ class MessageRepository:
     """保存有序消息并处理幂等重试。"""
 
     def __init__(self, session: AsyncSession) -> None:
+        """绑定事务单元提供的数据库会话，写操作只 flush，不自行提交事务。"""
+
+        # 外部事务单元提供的会话；仓储不负责 commit 或 close。
         self.session = session
 
     async def get_by_client_id(
         self, session_id: str, client_message_id: str
     ) -> MessageRecord | None:
+        """按会话及客户端消息标识查询，用于识别重复提交；未找到返回 None。"""
+
         query = select(MessageRecord).where(
             MessageRecord.session_id == session_id,
             MessageRecord.client_message_id == client_message_id,
@@ -88,6 +104,8 @@ class MessageRepository:
     async def append_user(
         self, session_id: str, client_message_id: str, content: str
     ) -> tuple[MessageRecord, bool]:
+        """返回（消息记录、是否新建）；重复提交返回原记录和 False。"""
+
         existing = await self.get_by_client_id(session_id, client_message_id)
         if existing:
             return existing, False
@@ -115,6 +133,8 @@ class MessageRepository:
     async def list_after(
         self, session_id: str, sequence: int, *, through: int | None = None
     ) -> list[MessageRecord]:
+        """返回指定序号之后的搜索相关消息；through 限定本轮可读取的末尾序号。"""
+
         query = select(MessageRecord).where(
             MessageRecord.session_id == session_id,
             MessageRecord.sequence > sequence,
@@ -133,9 +153,14 @@ class PlanRepository:
     """保存不可变计划版本并更新当前版本指针。"""
 
     def __init__(self, session: AsyncSession) -> None:
+        """绑定事务单元提供的数据库会话，写操作只 flush，不自行提交事务。"""
+
+        # 外部事务单元提供的会话；仓储不负责 commit 或 close。
         self.session = session
 
     async def get_current(self, session_id: str) -> SearchPlan | None:
+        """读取最新计划快照并还原领域对象；尚无计划时返回 None。"""
+
         query = (
             select(SearchPlanRecord)
             .where(SearchPlanRecord.session_id == session_id)
@@ -146,6 +171,8 @@ class PlanRepository:
         return SearchPlan.model_validate(record.plan_json, strict=False) if record else None
 
     async def save(self, session_record: AgentSessionRecord, plan: SearchPlan) -> SearchPlan:
+        """新增不可变计划快照、更新会话版本指针并返回原计划；事务退出时提交。"""
+
         record = SearchPlanRecord(
             id=new_id("plan"),
             session_id=session_record.id,
@@ -163,9 +190,14 @@ class ClarificationRepository:
     """保存和消费 V1 唯一的待处理澄清问题。"""
 
     def __init__(self, session: AsyncSession) -> None:
+        """绑定事务单元提供的数据库会话，写操作只 flush，不自行提交事务。"""
+
+        # 外部事务单元提供的会话；仓储不负责 commit 或 close。
         self.session = session
 
     async def get(self, session_id: str) -> ClarificationCard | None:
+        """读取会话的待澄清卡；不存在时返回 None。"""
+
         query = select(PendingClarificationRecord).where(
             PendingClarificationRecord.session_id == session_id
         )
@@ -195,6 +227,8 @@ class ClarificationRepository:
         card: ClarificationCard,
         draft: SearchPlanDraft | None = None,
     ) -> None:
+        """保存或替换本会话唯一的澄清卡及草稿；仅 flush，事务退出时提交。"""
+
         existing = await self.session.scalar(
             select(PendingClarificationRecord).where(
                 PendingClarificationRecord.session_id == session_id
@@ -218,6 +252,8 @@ class ClarificationRepository:
         await self.session.flush()
 
     async def clear(self, session_id: str) -> None:
+        """删除当前会话的待澄清记录；记录不存在时无需处理。"""
+
         record = await self.session.scalar(
             select(PendingClarificationRecord).where(
                 PendingClarificationRecord.session_id == session_id
@@ -231,6 +267,9 @@ class RunRepository:
     """管理活动 Run，且不回滚已经完成的计划写入。"""
 
     def __init__(self, session: AsyncSession) -> None:
+        """绑定事务单元提供的数据库会话，写操作只 flush，不自行提交事务。"""
+
+        # 外部事务单元提供的会话；仓储不负责 commit 或 close。
         self.session = session
 
     async def create(
@@ -256,6 +295,8 @@ class RunRepository:
         return run
 
     async def get(self, run_id: str) -> RunRecord | None:
+        """按运行 ID 查询数据库记录；不存在时返回 None。"""
+
         return await self.session.get(RunRecord, run_id)
 
     async def get_by_trigger(
@@ -269,6 +310,8 @@ class RunRepository:
         ))
 
     async def mark_superseded(self, run_id: str, replacement_id: str) -> None:
+        """记录旧运行被哪个新运行替代；已成功或失败的记录保持原状。"""
+
         run = await self.get(run_id)
         if run and run.status not in {RunStatus.SUCCEEDED.value, RunStatus.FAILED.value}:
             run.status = RunStatus.SUPERSEDED.value
@@ -282,8 +325,10 @@ class RunRepository:
         stage: str | None = None,
         result_status: str | None = None,
         error_code: str | None = None,
-        result_json: dict | None = None,
+        result_json: dict[str, Any] | None = None,
     ) -> RunRecord:
+        """更新非空参数指定的运行字段并返回记录；运行不存在时抛出 LookupError。"""
+
         run = await self.get(run_id)
         if run is None:
             raise LookupError(f"run not found: {run_id}")

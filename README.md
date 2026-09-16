@@ -2,9 +2,9 @@
 
 自然语言找人 Agent 的 Python 编排服务。
 
-## 演示重点
+## 核心能力
 
-这个项目优先展示 Agent 开发的核心链路，代码按 Java 开发者容易理解的方式分层：
+项目使用分层结构实现自然语言人才搜索：
 
 1. `MessageRouter` 判断闲聊、搜索、修改、翻页、停止和澄清回答。
 2. LLM 只把自然语言转换为 `SearchPlanDraft` 或 `PlanPatch`，不直接调用任意工具。
@@ -13,7 +13,7 @@
 5. `TalentSearchPort` 是 Tool 边界，由 `JavaTalentClient` 调用招聘系统。
 6. 新的有效搜索消息会替代旧 Run；闲聊和进度查询不会打断搜索。
 
-当前是单实例演示版本。只保留一个进程内消息写锁，确保演示打断时两个短暂重叠的
+当前采用单实例运行方式。使用进程内消息写锁，确保搜索被新消息打断时两个短暂重叠的
 HTTP 请求不会生成相同消息序号；暂不实现分布式锁、多实例一致性和复杂并发恢复。
 
 V1 将招聘人员的中文自然语言转换为受控、可审计的 `SearchPlan`，并调用 `recruit-social` 的 eTalent/Elasticsearch 搜索能力返回权限内人才。当前支持姓名、候选人职位、最低学历、工作年限、公司、学校、期望工作地、现居住地和院校标签。
@@ -59,7 +59,7 @@ uv run talent-agent-py
 
 服务默认监听 `http://localhost:8000`：
 
-- `GET /`：自然语言找人演示页面。
+- `GET /`：自然语言找人会话页面。
 - `GET /health`：进程存活检查。
 - `GET /ready`：数据库就绪检查。
 - `GET /docs`：OpenAPI 文档。
@@ -105,7 +105,7 @@ V1 采用 Run 状态轮询，没有同时维护 SSE。用户修改搜索条件�
 uv run alembic upgrade head
 ```
 
-`TALENT_AGENT_AUTO_CREATE_SCHEMA=true` 只用于测试和本地演示。
+`TALENT_AGENT_AUTO_CREATE_SCHEMA=true` 只用于测试和本地开发。
 
 MySQL 使用异步 `asyncmy` 驱动，例如：
 
@@ -137,3 +137,8 @@ Cookie、Authorization、API Key、手机号、邮箱和证件号始终显示为
 ## Java 契约
 
 Java 适配假设和上线前必须确认的字段语义见 [docs/java-contract.md](./docs/java-contract.md)。
+
+## 后续设计
+
+当前设计决策、会话记忆边界，以及后续“职位截图解析 → 复用找人 Agent → 人岗匹配”的方案见
+[Talent Agent 当前设计记忆与职位截图方案](./docs/design-memory-and-position-image-plan.md)。

@@ -1,16 +1,24 @@
 """会话查询服务。"""
 
+from collections.abc import Callable
+
 from talent_agent_py.application.exceptions import SessionNotFoundError
 from talent_agent_py.domain.conversation import SessionSummaryView, SessionView, UserContext
+from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 
 
 class SessionService:
     """创建和读取当前用户拥有的搜索会话。"""
 
-    def __init__(self, uow_factory) -> None:
+    def __init__(self, uow_factory: Callable[[], UnitOfWork]) -> None:
+        """保存事务工厂，每次操作创建独立的数据库事务。"""
+
+        # 创建会话查询和写入所需的独立事务。
         self._uow_factory = uow_factory
 
     async def create(self, user: UserContext) -> SessionView:
+        """创建归属于当前用户的空会话，并返回会话视图。"""
+
         async with self._uow_factory() as uow:
             record = await uow.sessions.create(user.user_id)
             return SessionView(
@@ -36,6 +44,8 @@ class SessionService:
             ]
 
     async def get(self, session_id: str, user: UserContext) -> SessionView:
+        """查询会话、计划和待澄清卡；会话不存在或不归当前用户时抛出异常。"""
+
         async with self._uow_factory() as uow:
             record = await uow.sessions.get_owned(session_id, user.user_id)
             if record is None:

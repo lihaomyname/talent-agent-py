@@ -35,7 +35,7 @@ def build_client(tmp_path, llm=None, talent=None):
 
 
 def test_frontend_entry_and_static_assets_are_available(tmp_path):
-    """演示首页和本地静态资源应由同一个 FastAPI 服务提供。"""
+    """会话首页和本地静态资源应由同一个 FastAPI 服务提供。"""
     with build_client(tmp_path) as client:
         page = client.get("/")
         script = client.get("/static/app.js")

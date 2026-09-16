@@ -1,5 +1,7 @@
 """Java eTalent 内部接口适配器。"""
 
+from typing import Any
+
 import httpx
 import structlog
 
@@ -39,7 +41,11 @@ class JavaTalentClient(TalentSearchPort):
     }
 
     def __init__(self, http_client: httpx.AsyncClient, settings: Settings) -> None:
+        """保存 HTTP 客户端和配置；启用用户 Cookie 时检查目标地址白名单。"""
+
+        # 由应用生命周期创建并关闭的共享异步 HTTP 客户端。
         self._http = http_client
+        # 招聘接口路径、超时和认证策略。
         self._settings = settings
         if settings.java_requires_user_cookie:
             base_url = self._http.base_url
@@ -51,6 +57,8 @@ class JavaTalentClient(TalentSearchPort):
                 raise ValueError("招聘 Cookie 只能发送到白名单 HTTPS 标准端口")
 
     def _headers(self, user: UserContext) -> dict[str, str]:
+        """构建可信用户头、服务凭据和允许转发的招聘 Cookie。"""
+
         headers = {"X-Effective-User-Id": user.user_id, "X-Trace-Id": user.trace_id or ""}
         if user.tenant_id:
             headers["X-Tenant-Id"] = user.tenant_id
@@ -69,6 +77,8 @@ class JavaTalentClient(TalentSearchPort):
         return headers
 
     async def _post(self, path: str, payload: object, user: UserContext) -> object:
+        """发送 JSON 请求并记录日志，返回业务 data；请求失败转换为依赖异常。"""
+
         headers = self._headers(user)
         logger.info(
             "招聘接口请求",
@@ -148,7 +158,7 @@ class JavaTalentClient(TalentSearchPort):
         return body
 
     @staticmethod
-    def _candidate_card(item: dict) -> CandidateCard:
+    def _candidate_card(item: dict[str, Any]) -> CandidateCard:
         """把宽版 TalentResumeVO 收敛为不含联系方式的安全候选人卡片。"""
 
         raw_id = item.get("id") or item.get("applicantId")
@@ -175,6 +185,8 @@ class JavaTalentClient(TalentSearchPort):
     async def resolve_entities(
         self, requests: list[EntityResolutionRequest], user: UserContext
     ) -> list[EntityResolution]:
+        """按配置选择内部契约或招聘网站适配，返回逐项实体解析结果。"""
+
         if self._settings.java_direct_browser_api:
             return await self._resolve_browser_entities(requests, user)
         payload = {"entities": [item.model_dump(mode="json") for item in requests]}
@@ -193,7 +205,7 @@ class JavaTalentClient(TalentSearchPort):
     ) -> list[EntityResolution]:
         """复用现有字典和文本搜索语义，替代尚未建设的内部解析接口。"""
 
-        city_items: list[dict] = []
+        city_items: list[dict[str, Any]] = []
         if any(item.kind is EntityKind.CITY for item in requests):
             city_data = await self._get(self._settings.java_city_options_path, user)
             if not isinstance(city_data, dict):
@@ -251,6 +263,8 @@ class JavaTalentClient(TalentSearchPort):
     async def search_candidates(
         self, request: TalentSearchRequest, user: UserContext
     ) -> TalentSearchResponse:
+        """请求人才列表并适配分页格式，返回最多一页的安全候选人卡片。"""
+
         data = await self._post(
             self._settings.java_search_path,
             request.model_dump(mode="json", exclude_none=True),

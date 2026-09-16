@@ -1,8 +1,11 @@
 """连接消息入口、运行生命周期和 LangGraph 的应用服务。"""
 
 import asyncio
+from collections.abc import Callable
+from typing import Any
 
 import structlog
+from langgraph.graph.state import CompiledStateGraph
 
 from talent_agent_py.application.clarification_service import (
     apply_entity_answer,
@@ -25,16 +28,20 @@ from talent_agent_py.application.ports.talent_search import TalentSearchPort
 from talent_agent_py.application.search_compiler import compile_search_request
 from talent_agent_py.domain.conversation import (
     ClarificationAnswer,
+    ClarificationCard,
     MessageOutcome,
+    MessageRoute,
     PageReference,
     RunView,
     SearchResult,
     UserContext,
 )
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
-from talent_agent_py.domain.plan import SearchPlanDraft
+from talent_agent_py.domain.plan import SearchPlan, SearchPlanDraft
 from talent_agent_py.infrastructure.persistence.models import RunRecord
+from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 from talent_agent_py.infrastructure.runtime.task_registry import TaskRegistry
+from talent_agent_py.orchestration.state import AgentState
 from talent_agent_py.settings import Settings
 from talent_agent_py.telemetry import INTERRUPTIONS, RUN_OUTCOMES, RUN_STAGES
 
@@ -47,24 +54,34 @@ class AgentService:
     def __init__(
         self,
         *,
-        uow_factory,
+        uow_factory: Callable[[], UnitOfWork],
         router: MessageRouter,
-        graph,
+        graph: CompiledStateGraph[AgentState, None, AgentState, AgentState],
         talent_search: TalentSearchPort,
         task_registry: TaskRegistry,
         settings: Settings,
     ) -> None:
+        """注入事务工厂、路由器、已编译 Graph 和招聘客户端，供消息主流程复用。"""
+
+        # 数据库事务工厂；每个 async with 对应一次提交或回滚边界。
         self._uow_factory = uow_factory
+        # Graph 之前的消息意图路由器。
         self._router = router
+        # 已编译的人才搜索 Graph，输入输出均以 AgentState 描述。
         self._graph = graph
+        # 分页路径直接调用的招聘搜索端口。
         self._talent_search = talent_search
+        # 当前进程中每个会话的活动异步任务。
         self._tasks = task_registry
+        # Agent 开关及搜索策略配置。
         self._settings = settings
-        # 演示打断时两个 HTTP 请求会短暂重叠，只串行化消息序号的生成和提交。
+        # 搜索被新消息打断时，两个 HTTP 请求会短暂重叠，只串行化消息序号的生成和提交。
         self._message_write_lock = asyncio.Lock()
 
     @staticmethod
     def _run_view(record: RunRecord) -> RunView:
+        """将数据库运行记录转换为 API 展示对象，并还原状态枚举。"""
+
         return RunView(
             run_id=record.id,
             session_id=record.session_id,
@@ -76,7 +93,10 @@ class AgentService:
             updated_at=record.updated_at,
         )
 
-    async def _load_message_context(self, session_id: str, user: UserContext):
+    async def _load_message_context(
+        self, session_id: str, user: UserContext
+    ) -> tuple[str | None, SearchPlan | None, ClarificationCard | None]:
+        """返回（活动运行 ID、当前计划、待澄清卡），尚未产生的项为 None。"""
         async with self._uow_factory() as uow:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
             if session_record is None:
@@ -101,6 +121,7 @@ class AgentService:
         if not self._settings.enable_agent:
             raise FeatureDisabledError("当前环境尚未开启自然语言找人")
 
+        # 先提交消息，再执行模型和网络调用，避免长时间持有数据库事务。
         async with self._message_write_lock:
             async with self._uow_factory() as uow:
                 session_record = await uow.sessions.get_owned(session_id, user.user_id)
@@ -167,6 +188,7 @@ class AgentService:
                 existing_card=pending,
             )
 
+        # 卡片答案直接恢复已保存草稿，避免将用户已确认的条件重新交给模型猜测。
         initial_draft = None
         entities_resolved = False
         if clarification_answer:
@@ -229,6 +251,8 @@ class AgentService:
         answer: ClarificationAnswer,
         user: UserContext,
     ) -> tuple[SearchPlanDraft, bool]:
+        """校验当前卡片并回填草稿。返回（更新后的草稿、是否可跳过实体解析）。"""
+
         async with self._uow_factory() as uow:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
             if session_record is None:
@@ -291,11 +315,13 @@ class AgentService:
         session_id: str,
         message_sequence: int,
         user: UserContext,
-        route,
+        route: MessageRoute,
         old_run_id: str | None,
         initial_draft: SearchPlanDraft | None,
         entities_resolved: bool = False,
     ) -> MessageOutcome:
+        """创建新运行并替代旧任务，返回搜索结果或已被替代的结果响应。"""
+
         async with self._uow_factory() as uow:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
             if session_record is None:
@@ -305,6 +331,8 @@ class AgentService:
                 await uow.runs.mark_superseded(old_run_id, run.id)
 
         async def execute_replacement() -> SearchResult:
+            """等待旧任务收尾后执行新 Graph，返回新运行的业务结果。"""
+
             return await self._execute_graph(
                 session_id=session_id,
                 run_id=run.id,
@@ -342,10 +370,12 @@ class AgentService:
         run_id: str,
         message_sequence: int,
         user: UserContext,
-        route,
+        route: MessageRoute,
         initial_draft: SearchPlanDraft | None,
         entities_resolved: bool,
     ) -> SearchResult:
+        """执行 Graph 并取出最终 SearchResult；将模型和依赖异常转成可展示结果。"""
+
         async with self._uow_factory() as uow:
             await uow.runs.update(run_id, status=RunStatus.RUNNING, stage="load_context")
         try:
@@ -398,6 +428,8 @@ class AgentService:
         *,
         message: str = "本轮处理失败，请稍后重试。",
     ) -> SearchResult:
+        """保存失败运行的状态与错误结果，返回供前端展示的 SearchResult。"""
+
         async with self._uow_factory() as uow:
             existing = await uow.runs.get(run_id)
             if existing is not None and existing.status in {
@@ -431,6 +463,8 @@ class AgentService:
     async def _stop(
         self, session_id: str, run_id: str | None, user: UserContext
     ) -> MessageOutcome:
+        """取消当前运行并返回停止结果；已完成运行沿用其终态。"""
+
         await self._tasks.cancel(session_id)
         INTERRUPTIONS.labels("explicit_stop").inc()
         logger.info("用户取消运行", session_id=session_id, run_id=run_id)
@@ -461,12 +495,14 @@ class AgentService:
         self,
         session_id: str,
         message_sequence: int,
-        current_plan,
+        current_plan: SearchPlan | None,
         user: UserContext,
         *,
         active_run_id: str | None,
-        existing_card=None,
+        existing_card: ClarificationCard | None = None,
     ) -> MessageOutcome:
+        """保存消息意图卡并返回澄清响应；不主动取消原搜索。"""
+
         card = existing_card or intent_card()
         async with self._uow_factory() as uow:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
@@ -498,6 +534,8 @@ class AgentService:
         ))
 
     async def get_run(self, run_id: str, user: UserContext) -> RunView:
+        """检查会话归属后返回运行视图；运行或所属会话不可访问时抛出业务异常。"""
+
         async with self._uow_factory() as uow:
             run = await uow.runs.get(run_id)
             if run is None:
@@ -516,6 +554,8 @@ class AgentService:
         return await self._stop(session_id, active_run_id, user)
 
     async def get_result(self, session_id: str, user: UserContext) -> SearchResult | None:
+        """返回会话活动运行的已保存结果；没有运行或结果时返回 None。"""
+
         async with self._uow_factory() as uow:
             session_record = await uow.sessions.get_owned(session_id, user.user_id)
             if session_record is None:
@@ -528,7 +568,7 @@ class AgentService:
                 if run and run.result_json else None
             )
 
-    def _bounded_result(self, payload: dict) -> SearchResult:
+    def _bounded_result(self, payload: dict[str, Any]) -> SearchResult:
         """兼容旧运行快照，并保证恢复历史时每页也只展示 10 条。"""
 
         result = SearchResult.model_validate(payload, strict=False)

@@ -33,7 +33,18 @@ from talent_agent_py.domain.plan import (
 )
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 from talent_agent_py.orchestration.interruptible import complete_before_cancel, interruptible
-from talent_agent_py.orchestration.state import AgentState
+from talent_agent_py.orchestration.state import (
+    AgentState,
+    ClarifyOutput,
+    CompileSearchOutput,
+    EntityResolutionOutput,
+    FinalizeOutput,
+    LoadContextOutput,
+    ParsePlanOutput,
+    SavePlanOutput,
+    SearchCandidatesOutput,
+    ValidationOutput,
+)
 from talent_agent_py.settings import Settings
 from talent_agent_py.telemetry import (
     CLARIFICATIONS,
@@ -51,9 +62,13 @@ logger = structlog.get_logger(__name__)
 class GraphDependencies:
     """图节点共享的端口和资源工厂。"""
 
+    # 每次调用创建独立事务单元，避免不同节点共享未提交事务。
     uow_factory: Callable[[], UnitOfWork]
+    # 模型端口，负责语义草稿及增量补丁解析。
     llm: LLMClient
+    # 招聘端口，负责实体解析及人才搜索。
     talent_search: TalentSearchPort
+    # 搜索分页和默认策略等运行配置。
     settings: Settings
 
 
@@ -61,6 +76,9 @@ class TalentSearchNodes:
     """把节点依赖封装在一个可测试对象中。"""
 
     def __init__(self, dependencies: GraphDependencies) -> None:
+        """保存节点共用的事务工厂、模型、招聘接口和配置依赖。"""
+
+        # 全部节点共享的依赖容器，节点不自行创建外部客户端。
         self._deps = dependencies
 
     @staticmethod
@@ -75,8 +93,12 @@ class TalentSearchNodes:
             message="本轮搜索已被更新的条件替代。",
         )
 
-    async def load_context(self, state: AgentState) -> dict:
-        """加载当前计划和尚未被计划吸收的用户消息。"""
+    async def load_context(self, state: AgentState) -> LoadContextOutput:
+        """加载当前计划和尚未被计划吸收的用户消息。
+
+        读取：session_id 和 trigger_message_sequence。
+        返回：current_plan 和 messages；首次搜索的计划为 None。
+        """
 
         RUN_STAGES.labels("load_context").inc()
         async with self._deps.uow_factory() as uow:
@@ -93,9 +115,14 @@ class TalentSearchNodes:
         }
 
     @interruptible
-    async def parse_plan(self, state: AgentState) -> dict:
-        """首次搜索生成草稿，后续搜索只生成并应用 PlanPatch。"""
+    async def parse_plan(self, state: AgentState) -> ParsePlanOutput:
+        """首次搜索生成草稿，后续搜索只生成并应用 PlanPatch。
 
+        读取：draft、current_plan、route、messages。
+        返回：已有草稿时为空更新；增量路径返回 patch 和 draft；首次路径返回 draft。
+        """
+
+        # 澄清回答已在入口恢复草稿，返回空更新表示继续使用原状态中的 draft。
         if state.get("draft") is not None:
             return {}
         current_plan = state.get("current_plan")
@@ -144,14 +171,22 @@ class TalentSearchNodes:
         draft = enforce_location_scope_clarification(draft, state["messages"])
         return {"draft": draft}
 
-    async def validate(self, state: AgentState) -> dict:
-        """执行确定性范围、冲突和阻塞项校验。"""
+    async def validate(self, state: AgentState) -> ValidationOutput:
+        """执行确定性范围、冲突和阻塞项校验。
+
+        读取：draft。
+        返回：validation，供条件边选择澄清或继续搜索。
+        """
 
         return {"validation": validate_draft(state["draft"])}
 
     @interruptible
-    async def resolve_entities(self, state: AgentState) -> dict:
-        """所有业务 code 都通过 Java 解析，模型输出不被信任。"""
+    async def resolve_entities(self, state: AgentState) -> EntityResolutionOutput:
+        """所有业务 code 都通过 Java 解析，模型输出不被信任。
+
+        读取：draft 和 user。
+        返回：更新后的 draft 及重新计算的 validation。
+        """
 
         EXTERNAL_CALLS.labels("java", "resolve_entities").inc()
         started = time.perf_counter()
@@ -165,10 +200,15 @@ class TalentSearchNodes:
             JAVA_LATENCY.labels("resolve_entities").observe(time.perf_counter() - started)
         return {"draft": draft, "validation": validate_draft(draft)}
 
-    async def clarify(self, state: AgentState) -> dict:
-        """生成固定卡片并保存当前草稿，HTTP 请求随后正常结束。"""
+    async def clarify(self, state: AgentState) -> ClarifyOutput:
+        """生成固定卡片并保存当前草稿，HTTP 请求随后正常结束。
+
+        读取：draft、validation、当前计划及运行身份。
+        返回：clarification 和 result；旧运行被替代时仅返回 result。
+        """
 
         draft = state["draft"]
+        # 一次只展示一个阻塞问题；保存完整草稿，回答后再处理剩余问题。
         if draft.unsupported_conditions:
             card = unsupported_condition_card(draft.unsupported_conditions[0])
         elif draft.unresolved_location:
@@ -241,10 +281,15 @@ class TalentSearchNodes:
         return {"clarification": card, "result": result}
 
     @complete_before_cancel
-    async def save_plan(self, state: AgentState) -> dict:
-        """数据库保存开始后允许完成；新的用户消息将在下一版本继续修改。"""
+    async def save_plan(self, state: AgentState) -> SavePlanOutput:
+        """数据库保存开始后允许完成；新的用户消息将在下一版本继续修改。
+
+        读取：draft、current_plan、触发消息序号及会话身份。
+        返回：已提交的新版本 current_plan。
+        """
 
         RUN_STAGES.labels("save_plan").inc()
+        # 同时推进版本和已吸收消息序号，后续补丁只处理未消费的新消息。
         current = state.get("current_plan")
         plan = SearchPlan(
             version=(current.version + 1) if current else 1,
@@ -262,8 +307,12 @@ class TalentSearchNodes:
             await uow.clarifications.clear(state["session_id"])
         return {"current_plan": plan}
 
-    async def compile_search(self, state: AgentState) -> dict:
-        """将计划映射为固定的 Java Tool 输入。"""
+    async def compile_search(self, state: AgentState) -> CompileSearchOutput:
+        """将计划映射为固定的 Java Tool 输入。
+
+        读取：current_plan 和服务端配置。
+        返回：search_request，不调用模型或网络。
+        """
 
         return {
             "search_request": compile_search_request(
@@ -272,8 +321,12 @@ class TalentSearchNodes:
         }
 
     @interruptible
-    async def search_candidates(self, state: AgentState) -> dict:
-        """调用 Java 权威搜索并保留原始排序。"""
+    async def search_candidates(self, state: AgentState) -> SearchCandidatesOutput:
+        """调用 Java 权威搜索并保留原始排序。
+
+        读取：search_request 和 user。
+        返回：search_response，保留招聘接口候选人顺序。
+        """
 
         EXTERNAL_CALLS.labels("java", "search_candidates").inc()
         RUN_STAGES.labels("search_candidates").inc()
@@ -286,13 +339,18 @@ class TalentSearchNodes:
             JAVA_LATENCY.labels("search_candidates").observe(time.perf_counter() - started)
         return {"search_response": response}
 
-    async def finalize(self, state: AgentState) -> dict:
-        """生成与当前 runId 和 planVersion 绑定的最终结果。"""
+    async def finalize(self, state: AgentState) -> FinalizeOutput:
+        """生成与当前 runId 和 planVersion 绑定的最终结果。
+
+        读取：search_response、current_plan、search_request 及运行身份。
+        返回：result；旧运行不能覆盖当前活动运行的结果。
+        """
 
         response = state["search_response"]
         plan = state["current_plan"]
         status = ResultStatus.OK if response.candidates else ResultStatus.EMPTY
         next_page = None
+        # 分页引用绑定计划版本，避免改条件后继续翻阅旧计划的结果。
         if response.has_next:
             next_page = PageReference(
                 session_id=state["session_id"],

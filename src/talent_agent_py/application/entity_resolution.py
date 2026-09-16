@@ -41,6 +41,8 @@ def build_resolution_requests(draft: SearchPlanDraft) -> list[EntityResolutionRe
 
 
 def _single_entity(result: EntityResolution) -> ResolvedEntity | None:
+    """仅唯一解析成功时返回权威实体，其余情况返回 None。"""
+
     if result.status is not EntityResolutionStatus.RESOLVED or len(result.candidates) != 1:
         return None
     candidate = result.candidates[0]
@@ -74,6 +76,8 @@ async def resolve_draft_entities(
             conditions[field_name]["resolved"] = None
 
     def resolved_for(key: str) -> ResolvedEntity | None:
+        """按请求键提取实体；缺失或多义时追加歧义并返回 None。"""
+
         result = results.get(key)
         if result is None:
             ambiguities.append(Ambiguity(

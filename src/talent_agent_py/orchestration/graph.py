@@ -1,9 +1,11 @@
 """自然语言找人 V1 固定状态图。"""
 
 from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 import structlog
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from talent_agent_py.orchestration.nodes import GraphDependencies, TalentSearchNodes
 from talent_agent_py.orchestration.state import AgentState
@@ -11,14 +13,19 @@ from talent_agent_py.telemetry import sanitize_log_value
 
 logger = structlog.get_logger(__name__)
 
+# 保留被包装节点的返回类型，让 IDE 能显示每个节点具体更新哪些字段。
+NodeOutput = TypeVar("NodeOutput")
+
 
 def _with_node_log(
     node_name: str,
-    node: Callable[[AgentState], Awaitable[dict]],
-) -> Callable[[AgentState], Awaitable[dict]]:
+    node: Callable[[AgentState], Awaitable[NodeOutput]],
+) -> Callable[[AgentState], Awaitable[NodeOutput]]:
     """统一包装节点进入、完成和异常日志，避免每个节点重复写模板代码。"""
 
-    async def logged_node(state: AgentState) -> dict:
+    async def logged_node(state: AgentState) -> NodeOutput:
+        """执行原节点并记录开始、完成或异常，原样返回该节点的状态更新。"""
+
         common = {
             "node": node_name,
             "session_id": state.get("session_id"),
@@ -61,7 +68,9 @@ def _after_resolution(state: AgentState) -> str:
     return "clarify" if not validation.executable else "save_plan"
 
 
-def build_graph(dependencies: GraphDependencies):
+def build_graph(
+    dependencies: GraphDependencies,
+) -> CompiledStateGraph[AgentState, None, AgentState, AgentState]:
     """构建代码控制的 StateGraph，不允许模型动态增加工具或边。"""
 
     nodes = TalentSearchNodes(dependencies)

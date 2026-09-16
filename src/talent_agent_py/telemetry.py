@@ -7,6 +7,9 @@ from typing import Any
 import structlog
 from fastapi import FastAPI, Request
 from prometheus_client import Counter, Histogram, make_asgi_app
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _SECRET_KEYS = {
     "authorization",
@@ -112,11 +115,17 @@ def decode_log_body(body: bytes) -> Any:
 class RequestResponseLogMiddleware:
     """在 ASGI 边界记录每次 HTTP 请求和响应，不改变流式传输行为。"""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app: ASGIApp) -> None:
+        """保存下游 ASGI 应用和 HTTP 日志器。"""
+
+        # 下游 ASGI 应用，接收原样透传的请求消息。
         self.app = app
+        # HTTP 请求响应专用的结构化日志器。
         self.logger = structlog.get_logger("talent_agent_py.http")
 
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """透传 ASGI 消息并采集请求响应日志，不改变消息发送顺序。"""
+
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -125,13 +134,17 @@ class RequestResponseLogMiddleware:
         response_body = bytearray()
         status_code = 500
 
-        async def logged_receive():
+        async def logged_receive() -> Message:
+            """接收并暂存请求体片段，原样返回下游需要的 ASGI 消息。"""
+
             message = await receive()
             if message["type"] == "http.request" and len(request_body) < _MAX_LOG_BODY_BYTES:
                 request_body.extend(message.get("body", b""))
             return message
 
-        async def logged_send(message):
+        async def logged_send(message: Message) -> None:
+            """采集响应状态及正文片段，再将消息原样发送给服务器。"""
+
             nonlocal status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
@@ -172,7 +185,11 @@ def configure_telemetry(app: FastAPI) -> None:
     )
 
     @app.middleware("http")
-    async def record_http_metrics(request: Request, call_next):
+    async def record_http_metrics(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """执行下一层中间件，记录耗时和计数，并返回原响应。"""
+
         started = time.perf_counter()
         response = await call_next(request)
         route = request.scope.get("route")

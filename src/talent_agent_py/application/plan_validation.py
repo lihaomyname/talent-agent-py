@@ -18,7 +18,9 @@ _EXPECTED_LOCATION_CUES = ("期望", "意向", "希望在", "想去", "工作地
 class ValidationOutcome:
     """校验结果；errors 表示不可恢复错误，ambiguities 表示需用户选择。"""
 
+    # 阻塞搜索的错误码，例如 EMPTY_SEARCH_PLAN。
     errors: tuple[str, ...] = ()
+    # 需要用户选择的歧义；为空才可能继续执行。
     ambiguities: tuple[Ambiguity, ...] = ()
 
     @property

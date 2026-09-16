@@ -27,13 +27,19 @@ logger = structlog.get_logger(__name__)
 class UnavailableLLMClient(LLMClient):
     """未配置模型密钥时保留服务健康检查，并在业务调用处明确失败。"""
 
-    async def classify_message(self, **kwargs) -> MessageRoute:
+    async def classify_message(self, **kwargs: object) -> MessageRoute:
+        """返回消息分类；不可用客户端会抛出 ModelOutputError。"""
+
         raise ModelOutputError("尚未配置 TALENT_AGENT_LLM_API_KEY")
 
-    async def parse_search_draft(self, **kwargs) -> SearchPlanDraft:
+    async def parse_search_draft(self, **kwargs: object) -> SearchPlanDraft:
+        """返回首次搜索草稿；模型调用或输出校验失败时抛出 ModelOutputError。"""
+
         raise ModelOutputError("尚未配置 TALENT_AGENT_LLM_API_KEY")
 
-    async def parse_plan_patch(self, **kwargs) -> PlanPatch:
+    async def parse_plan_patch(self, **kwargs: object) -> PlanPatch:
+        """返回基于当前计划的增量补丁；不可用或校验失败时抛出 ModelOutputError。"""
+
         raise ModelOutputError("尚未配置 TALENT_AGENT_LLM_API_KEY")
 
 
@@ -41,9 +47,13 @@ class InternalLLMClient(LLMClient):
     """通过严格结构化输出实现路由、首次解析和增量修改。"""
 
     def __init__(self, settings: Settings) -> None:
+        """依据配置创建模型客户端；密钥缺失时拒绝初始化真实客户端。"""
+
         if settings.llm_api_key is None:
             raise ValueError("启用真实模型时必须配置 TALENT_AGENT_LLM_API_KEY")
+        # 外层结构化输出失败时允许追加调用模型的次数。
         self._repair_attempts = settings.llm_repair_attempts
+        # OpenAI 兼容协议客户端，负责实际异步模型请求。
         self._model = ChatOpenAI(
             model=settings.llm_model,
             api_key=settings.llm_api_key.get_secret_value(),
@@ -89,6 +99,7 @@ class InternalLLMClient(LLMClient):
                     response=response.content,
                 )
                 payload = json.loads(response.content)
+                # 先校验外层契约；PlanPatch.value 的具体条件结构仍由应用补丁时校验。
                 parsed = output_type.model_validate(payload, strict=False)
                 logger.info(
                     "LLM 结构化结果",
@@ -132,6 +143,8 @@ class InternalLLMClient(LLMClient):
         current_plan: SearchPlan | None,
         has_pending_clarification: bool,
     ) -> MessageRoute:
+        """返回消息分类；不可用客户端会抛出 ModelOutputError。"""
+
         payload = {
             "message": message,
             "currentPlan": current_plan.model_dump(mode="json") if current_plan else None,
@@ -144,6 +157,8 @@ class InternalLLMClient(LLMClient):
         )
 
     async def parse_search_draft(self, *, messages: list[str]) -> SearchPlanDraft:
+        """返回首次搜索草稿；模型调用或输出校验失败时抛出 ModelOutputError。"""
+
         return await self._invoke_structured(
             system_prompt=PLAN_SYSTEM_PROMPT,
             user_prompt=str({"messages": messages}),
@@ -156,6 +171,8 @@ class InternalLLMClient(LLMClient):
         messages: list[str],
         current_plan: SearchPlan,
     ) -> PlanPatch:
+        """返回基于当前计划的增量补丁；不可用或校验失败时抛出 ModelOutputError。"""
+
         return await self._invoke_structured(
             system_prompt=PATCH_SYSTEM_PROMPT,
             user_prompt=str({

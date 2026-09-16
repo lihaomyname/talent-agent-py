@@ -19,39 +19,51 @@ from talent_agent_py.domain.enums import (
 class ResolvedEntity(StrictModel):
     """Java 权威标识和安全展示名称。"""
 
+    # 招聘系统返回的业务编码，不能由模型自行编造。
     code: str = Field(min_length=1, max_length=128)
+    # 供用户阅读的实体或选项名称。
     label: str = Field(min_length=1, max_length=200)
 
 
 class ApplicantNameCondition(StrictModel):
     """候选人姓名条件。"""
 
+    # 用户要求搜索的候选人姓名。
     value: str = Field(min_length=1, max_length=100)
+    # 姓名匹配方式，默认精确匹配。
     match_mode: NameMatchMode = NameMatchMode.EXACT
 
 
 class PositionCondition(StrictModel):
     """候选人简历职位，与招聘职位 ID 无关。"""
 
+    # 候选人简历中的职位名称，不是招聘职位 ID。
     value: str = Field(min_length=1, max_length=200)
+    # 职位经历范围：仅当前，或当前及历史。
     scope: ExperienceScope = ExperienceScope.CURRENT_OR_HISTORY
 
 
 class DegreeCondition(StrictModel):
     """最低学历语义值，以及可选的 Java 解析结果。"""
 
+    # 用户表达的最低学历名称，实体解析后才能取得业务编码。
     value: str = Field(min_length=1, max_length=50)
+    # 招聘系统解析后的实体；尚未解析时为空。
     resolved: ResolvedEntity | None = None
 
 
 class WorkYearsCondition(StrictModel):
     """面向招聘人员表达的总工作年限范围。"""
 
+    # 总工作年限下限，单位年；为空表示未限制下限。
     minimum: int | None = Field(default=None, ge=0, le=60)
+    # 总工作年限上限，单位年；为空表示未限制上限。
     maximum: int | None = Field(default=None, ge=0, le=60)
 
     @model_validator(mode="after")
     def validate_range(self) -> WorkYearsCondition:
+        """校验至少有一个年限边界且下限不大于上限，通过后返回自身。"""
+
         if self.minimum is None and self.maximum is None:
             raise ValueError("work years requires a minimum or maximum")
         if self.minimum is not None and self.maximum is not None:
@@ -63,49 +75,71 @@ class WorkYearsCondition(StrictModel):
 class CompanyCondition(StrictModel):
     """共享当前/历史范围的一组公司。"""
 
+    # 用户要求匹配的公司名称列表。
     names: list[str] = Field(min_length=1, max_length=20)
+    # 整组公司共享的经历范围：仅当前，或当前及历史。
     scope: ExperienceScope = ExperienceScope.CURRENT_OR_HISTORY
+    # 招聘系统解析后的实体；尚未解析时为空。
     resolved: list[ResolvedEntity] = Field(default_factory=list, max_length=20)
 
 
 class SchoolCondition(StrictModel):
     """由 Java 解析的一组学校。"""
 
+    # 用户要求匹配的毕业院校名称列表。
     names: list[str] = Field(min_length=1, max_length=20)
+    # 招聘系统解析后的实体；尚未解析时为空。
     resolved: list[ResolvedEntity] = Field(default_factory=list, max_length=20)
 
 
 class LocationCondition(StrictModel):
     """一个城市及其现居/期望语义。"""
 
+    # 用户表达的城市名称，待招聘系统解析。
     name: str = Field(min_length=1, max_length=100)
+    # 城市语义：现居住地或期望工作地。
     scope: LocationScope
+    # 招聘系统解析后的实体；尚未解析时为空。
     resolved: ResolvedEntity | None = None
 
 
 class SchoolLevelCondition(StrictModel):
     """院校等级标签和第一学历限制。"""
 
+    # 院校等级标签，如 985、211。
     labels: list[str] = Field(min_length=1, max_length=20)
+    # 是否将院校标签限制到第一学历。
     first_degree_only: bool = False
+    # 招聘系统解析后的实体；尚未解析时为空。
     resolved: list[ResolvedEntity] = Field(default_factory=list, max_length=20)
 
 
 class SearchConditions(StrictModel):
     """V1 可执行条件的完整集合。"""
 
+    # 姓名条件；为空表示不限制。
     applicant_name: ApplicantNameCondition | None = None
+    # 候选人职位条件；为空表示不限制。
     candidate_position: PositionCondition | None = None
+    # 最低学历条件；为空表示不限制。
     minimum_degree: DegreeCondition | None = None
+    # 总工作年限范围；为空表示不限制。
     work_years: WorkYearsCondition | None = None
+    # 公司经历条件；为空表示不限制。
     company: CompanyCondition | None = None
+    # 毕业院校条件；为空表示不限制。
     school: SchoolCondition | None = None
+    # 期望工作地条件；为空表示不限制。
     expected_city: LocationCondition | None = None
+    # 现居住地条件；为空表示不限制。
     current_city: LocationCondition | None = None
+    # 院校等级条件；为空表示不限制。
     school_level: SchoolLevelCondition | None = None
 
     @model_validator(mode="after")
     def validate_location_scopes(self) -> SearchConditions:
+        """校验城市字段和城市范围一致，通过后返回自身。"""
+
         if self.current_city and self.current_city.scope is not LocationScope.CURRENT_CITY:
             raise ValueError("current_city must use CURRENT_CITY scope")
         if self.expected_city and self.expected_city.scope is not LocationScope.EXPECTED_CITY:
@@ -116,40 +150,58 @@ class SearchConditions(StrictModel):
 class UnsupportedCondition(StrictModel):
     """模型能够理解、但 V1 无法执行的用户条件。"""
 
+    # 用户原始条件文本，供澄清时展示。
     original_text: str = Field(min_length=1, max_length=500)
+    # 当前版本无法执行该条件的原因。
     reason: str = Field(min_length=1, max_length=500)
+    # 是否为用户硬要求；当前校验仍会阻塞所有未处理的不支持条件。
     hard_requirement: bool = True
 
 
 class Ambiguity(StrictModel):
     """搜索前发现的阻塞性语义选择。"""
 
+    # 需要澄清的字段路径，可包含列表下标。
     field: str = Field(min_length=1, max_length=100)
+    # 无法直接执行的原因。
     reason: str = Field(min_length=1, max_length=500)
+    # 语义层可选文本，例如本科、硕士、博士。
     options: list[str] = Field(default_factory=list, max_length=20)
+    # 招聘系统提供的实体候选，包含可用于回填的编码。
     entity_options: list[ResolvedEntity] = Field(default_factory=list, max_length=20)
+    # 需要重新描述或忽略的原始实体文本；未知时为空。
     input_text: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class SearchPlanDraft(StrictModel):
     """Java 实体解析前的语义草稿。"""
 
+    # 数据结构版本，供结构化输出及持久化快照识别。
     schema_version: int = 1
+    # 本轮使用的九类受支持搜索条件。
     conditions: SearchConditions = Field(default_factory=SearchConditions)
+    # 城市已识别但现居或期望范围未知时保存的名称。
     unresolved_location: str | None = Field(default=None, min_length=1, max_length=100)
+    # 无法由当前搜索接口执行的条件，保留供用户澄清。
     unsupported_conditions: list[UnsupportedCondition] = Field(default_factory=list)
+    # 阻塞执行的歧义，需用户回答后才能继续。
     ambiguities: list[Ambiguity] = Field(default_factory=list)
 
 
 class PlanPatchItem(StrictModel):
     """后续用户轮次请求的一项计划修改。"""
 
+    # 增加、替换、删除或清空操作。
     operation: PatchOperation
+    # 操作目标字段；RESET 时必须为空。
     field: SupportedField | None = None
+    # 操作载荷，实际结构由 field 对应的条件模型校验。
     value: JsonValue | None = None
 
     @model_validator(mode="after")
     def validate_shape(self) -> PlanPatchItem:
+        """校验补丁操作的必需字段，避免 RESET 携带目标或 ADD 缺失载荷。"""
+
         if self.operation is PatchOperation.RESET:
             if self.field is not None or self.value is not None:
                 raise ValueError("RESET cannot target a field or carry a value")
@@ -163,10 +215,15 @@ class PlanPatchItem(StrictModel):
 class PlanPatch(StrictModel):
     """模型针对已提交 SearchPlan 生成的增量修改。"""
 
+    # 数据结构版本，供结构化输出及持久化快照识别。
     schema_version: int = 1
+    # 补丁基于的计划版本，应用前必须与当前版本一致。
     base_plan_version: int = Field(ge=0)
+    # 按顺序应用的修改指令。
     operations: list[PlanPatchItem] = Field(min_length=1, max_length=30)
+    # 无法由当前搜索接口执行的条件，保留供用户澄清。
     unsupported_conditions: list[UnsupportedCondition] = Field(default_factory=list)
+    # 阻塞执行的歧义，需用户回答后才能继续。
     ambiguities: list[Ambiguity] = Field(default_factory=list)
 
 
@@ -175,10 +232,15 @@ class SearchPlan(StrictModel):
 
     model_config = StrictModel.model_config | {"frozen": True}
 
+    # 数据结构版本，供结构化输出及持久化快照识别。
     schema_version: int = 1
+    # 当前会话内从 1 递增的计划版本。
     version: int = Field(ge=1)
+    # 此计划已吸收的最后消息序号，下一轮从其后继续读取。
     applied_through_message_seq: int = Field(ge=0)
+    # 本轮使用的九类受支持搜索条件。
     conditions: SearchConditions
+    # 无法由当前搜索接口执行的条件，保留供用户澄清。
     unsupported_conditions: tuple[UnsupportedCondition, ...] = ()
 
 
@@ -234,8 +296,8 @@ _LIST_FIELD_KEYS = {
 
 
 def _merge_add_value(
-    field: SupportedField, existing: dict, incoming: dict
-) -> dict:
+    field: SupportedField, existing: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
     """列表字段的 ADD 取并集，未提及的属性保持原值。"""
 
     list_key = _LIST_FIELD_KEYS[field]

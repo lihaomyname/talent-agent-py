@@ -18,6 +18,8 @@ from talent_agent_py.domain.plan import (
 
 
 def _question_id() -> str:
+    """生成新的澄清问题标识，供后续答案校验。"""
+
     return f"q_{uuid4().hex}"
 
 

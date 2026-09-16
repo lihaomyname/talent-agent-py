@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 talent-agent-py = "talent_agent_py.main:run"
+talent-agent-graph = "talent_agent_py.graph_printer:main"
 
 [dependency-groups]
 dev = [
@@ -45,7 +46,7 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-# 演示项目只启用语法、未使用变量和导入顺序规则，避免堆积难讲解的风格约束。
+# 启用语法、未使用变量和导入顺序检查。
 select = ["E4", "E7", "E9", "F", "I"]
 
 [build-system]

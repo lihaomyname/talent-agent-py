@@ -12,7 +12,11 @@ class TaskRegistry:
     """保存每个会话当前任务，并提供尽力取消能力。"""
 
     def __init__(self) -> None:
+        """初始化单进程的会话任务表和保护其更新的异步锁。"""
+
+        # 会话 ID 到当前异步任务的映射，只存在当前进程。
         self._tasks: dict[str, asyncio.Task] = {}
+        # 保护任务表替换与删除操作的异步锁。
         self._lock = asyncio.Lock()
 
     async def replace(self, session_id: str, task: asyncio.Task) -> asyncio.Task | None:
@@ -34,6 +38,8 @@ class TaskRegistry:
             previous = self._tasks.get(session_id)
 
             async def run_in_order() -> T:
+                """先取消并等待原任务收尾，再运行替代任务并返回其结果。"""
+
                 if previous is not None and not previous.done():
                     previous.cancel()
                     # 旧任务可能正在提交计划；必须等它完成受保护的数据库写入。

@@ -17,6 +17,9 @@ class MessageRouter:
     _PATCH_MARKERS = ("改成", "换成", "只看", "加上", "增加", "去掉", "删除", "不要")
 
     def __init__(self, llm: LLMClient) -> None:
+        """保存规则无法判断消息时使用的模型分类端口。"""
+
+        # 规则无法命中时使用的模型分类接口。
         self._llm = llm
 
     async def route(

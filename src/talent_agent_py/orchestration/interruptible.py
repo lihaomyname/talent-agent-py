@@ -14,6 +14,8 @@ def interruptible(func: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
 
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        """包装异步调用以落实取消边界，返回原方法的结果。"""
+
         task = asyncio.current_task()
         if task is not None and task.cancelling():
             raise asyncio.CancelledError
@@ -32,6 +34,8 @@ def complete_before_cancel(func: Callable[P, Awaitable[R]]) -> Callable[P, Await
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         # 独立任务配合 shield，避免父 Run 取消时中断已经开始的数据库事务。
+        """包装异步调用以落实取消边界，返回原方法的结果。"""
+
         operation = asyncio.create_task(func(*args, **kwargs))
         try:
             return await asyncio.shield(operation)
