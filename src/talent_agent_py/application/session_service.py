@@ -1,9 +1,21 @@
 """会话查询服务。"""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 
+from sqlalchemy import select
+
 from talent_agent_py.application.exceptions import SessionNotFoundError
-from talent_agent_py.domain.conversation import SessionSummaryView, SessionView, UserContext
+from talent_agent_py.domain.conversation import (
+    MessageHistoryView,
+    MessageOutcome,
+    SearchResult,
+    SessionSummaryView,
+    SessionView,
+    UserContext,
+)
+from talent_agent_py.infrastructure.persistence.models import MessageRecord, RunRecord
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 
 
@@ -61,3 +73,35 @@ class SessionService:
                 created_at=record.created_at,
                 updated_at=record.updated_at,
             )
+
+    async def history(self, session_id: str, user: UserContext) -> list[MessageHistoryView]:
+        """恢复用户消息和回复；旧数据从关联 Run 尽量补回搜索结果。"""
+
+        async with self._uow_factory() as uow:
+            if await uow.sessions.get_owned(session_id, user.user_id) is None:
+                raise SessionNotFoundError("会话不存在")
+            messages = (await uow.session.scalars(
+                select(MessageRecord).where(MessageRecord.session_id == session_id)
+                .order_by(MessageRecord.sequence)
+            )).all()
+            runs = (await uow.session.scalars(
+                select(RunRecord).where(RunRecord.session_id == session_id)
+                .order_by(RunRecord.created_at)
+            )).all()
+            by_sequence = {
+                run.trigger_message_sequence: run for run in runs
+                if run.trigger_message_sequence is not None and run.result_json
+            }
+            history = []
+            for message in messages:
+                outcome = None
+                if message.outcome_json:
+                    outcome = MessageOutcome.model_validate(message.outcome_json, strict=False)
+                elif run := by_sequence.get(message.sequence):
+                    outcome = MessageOutcome(
+                        kind="RESULT",
+                        result=SearchResult.model_validate(run.result_json, strict=False),
+                        is_page=message.route_type == "PAGE_ACTION",
+                    )
+                history.append(MessageHistoryView(content=message.content, outcome=outcome))
+            return history

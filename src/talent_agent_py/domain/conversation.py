@@ -197,3 +197,11 @@ class MessageOutcome(StrictModel):
     run: RunView | None = None
     # CHAT 分支的文本回复；其他分支通常为空。
     reply: str | None = None
+    is_page: bool = False
+
+
+class MessageHistoryView(StrictModel):
+    """按用户消息顺序恢复对话及对应回复。"""
+
+    content: str
+    outcome: MessageOutcome | None = None

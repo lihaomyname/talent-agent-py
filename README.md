@@ -88,6 +88,7 @@ Agent 只提取并透传 `authOpenIdToken`，不会转发其他 Cookie，也不�
 POST /api/v1/sessions
 GET  /api/v1/sessions
 GET  /api/v1/sessions/{sessionId}
+GET  /api/v1/sessions/{sessionId}/messages
 POST /api/v1/sessions/{sessionId}/messages
 GET  /api/v1/runs/{runId}
 POST /api/v1/sessions/{sessionId}/cancel
@@ -96,6 +97,11 @@ POST /api/v1/sessions/{sessionId}/pages
 ```
 
 V1 采用 Run 状态轮询，没有同时维护 SSE。用户修改搜索条件时会尝试取消旧的 LLM/Java 节点；已经开始的 SearchPlan 保存允许正常完成，新 Run 从最新计划继续。
+
+翻页成功后更新当前结果，同一计划的候选人列表在页面原位切换，不重复追加结果消息。
+消息及回复保存在数据库，刷新和切换会话时按顺序恢复，并展示最近浏览的结果页。
+升级已有数据库需要执行 `uv run alembic upgrade head`；旧消息可恢复原文和已保存的
+Run 结果，但此前未保存的闲聊回复无法补回。
 
 ## 数据库迁移
 
@@ -117,6 +123,7 @@ TALENT_AGENT_DATABASE_URL=mysql+asyncmy://user:password@127.0.0.1:3306/talent_ag
 
 ```bash
 uv run pytest -q
+node --test tests/frontend/test_history.cjs
 openspec validate build-natural-language-talent-search-v1 --strict
 ```
 

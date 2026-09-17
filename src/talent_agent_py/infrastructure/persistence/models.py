@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -76,6 +77,9 @@ class MessageRecord(Base):
         String(20), comment="消息角色：user=用户，assistant=助手"
     )
     content: Mapped[str] = mapped_column(Text, comment="消息原始文本内容")
+    outcome_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, comment="消息对应的安全回复快照"
+    )
     route_type: Mapped[str | None] = mapped_column(
         String(40),
         nullable=True,

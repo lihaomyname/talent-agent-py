@@ -21,6 +21,21 @@ def test_work_years_rejects_reverse_range():
         WorkYearsCondition(minimum=5, maximum=3)
 
 
+@pytest.mark.parametrize("pending", [
+    {"unsupported_conditions": [{"original_text": "支付系统经验", "reason": "不支持"}]},
+    {"ambiguities": [{"field": "minimum_degree", "reason": "需确认", "options": ["硕士", "博士"]}]},
+])
+def test_clarification_only_patch_preserves_conditions(pending):
+    patch = PlanPatch.model_validate({"base_plan_version": 1, "operations": [], **pending})
+    current = SearchConditions(applicant_name=ApplicantNameCondition(value="张三"))
+    assert apply_plan_patch(current, patch) == current
+
+
+def test_empty_patch_is_rejected():
+    with pytest.raises(ValidationError, match="plan patch requires"):
+        PlanPatch(base_plan_version=1, operations=[])
+
+
 def test_plan_patch_preserves_unmentioned_conditions():
     current = SearchConditions(
         applicant_name=ApplicantNameCondition(value="张三"),

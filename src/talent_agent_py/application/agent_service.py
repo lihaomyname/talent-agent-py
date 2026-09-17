@@ -6,6 +6,7 @@ from typing import Any
 
 import structlog
 from langgraph.graph.state import CompiledStateGraph
+from sqlalchemy import update
 
 from talent_agent_py.application.clarification_service import (
     apply_entity_answer,
@@ -38,7 +39,7 @@ from talent_agent_py.domain.conversation import (
 )
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
 from talent_agent_py.domain.plan import SearchPlan, SearchPlanDraft
-from talent_agent_py.infrastructure.persistence.models import RunRecord
+from talent_agent_py.infrastructure.persistence.models import AgentSessionRecord, RunRecord
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 from talent_agent_py.infrastructure.runtime.task_registry import TaskRegistry
 from talent_agent_py.orchestration.state import AgentState
@@ -116,6 +117,37 @@ class AgentService:
         user: UserContext,
         clarification_answer: ClarificationAnswer | None = None,
     ) -> MessageOutcome:
+        """持久化回复快照；同一消息重试不会覆盖原始回复。"""
+
+        outcome = await self._handle_message(
+            session_id=session_id, client_message_id=client_message_id,
+            content=content, user=user, clarification_answer=clarification_answer,
+        )
+        async with self._uow_factory() as uow:
+            message = await uow.messages.get_by_client_id(
+                session_id, client_message_id
+            )
+            if message and message.outcome_json is None:
+                # 正在执行时的重复提交只返回状态，不作为最终回复保存。
+                if (
+                    outcome.reply != "这条消息已经收到。"
+                    and (
+                        outcome.kind != "STATUS"
+                        or message.route_type in {"STATUS_QUERY", "CONTROL_STOP"}
+                    )
+                ):
+                    message.outcome_json = outcome.model_dump(mode="json")
+        return outcome
+
+    async def _handle_message(
+        self,
+        *,
+        session_id: str,
+        client_message_id: str,
+        content: str,
+        user: UserContext,
+        clarification_answer: ClarificationAnswer | None = None,
+    ) -> MessageOutcome:
         """保存、路由并执行一条消息；重复消息不会重复调用外部服务。"""
 
         if not self._settings.enable_agent:
@@ -131,6 +163,8 @@ class AgentService:
                     session_id, client_message_id, content
                 )
                 if not created:
+                    if message.outcome_json:
+                        return MessageOutcome.model_validate(message.outcome_json, strict=False)
                     existing_run = await uow.runs.get_by_trigger(session_id, message.sequence)
                     if existing_run and existing_run.result_json:
                         return MessageOutcome(
@@ -590,6 +624,7 @@ class AgentService:
             plan = await uow.plans.get_current(reference.session_id)
             if plan is None or plan.version != reference.plan_version:
                 raise StalePageReferenceError("分页引用已失效")
+            previous_run_id = session_record.active_run_id
             run = await uow.runs.create(
                 session_record, None, activate=False
             )
@@ -623,4 +658,14 @@ class AgentService:
                 result_status=status.value,
                 result_json=result.model_dump(mode="json"),
             )
-        return MessageOutcome(kind="RESULT", result=result)
+            # 翻页完成才推进当前结果；不能覆盖期间开始的新搜索或其他分页。
+            await uow.session.execute(
+                update(AgentSessionRecord)
+                .where(
+                    AgentSessionRecord.id == reference.session_id,
+                    AgentSessionRecord.active_run_id == previous_run_id,
+                    AgentSessionRecord.current_plan_version == reference.plan_version,
+                )
+                .values(active_run_id=run.id)
+            )
+        return MessageOutcome(kind="RESULT", result=result, is_page=True)

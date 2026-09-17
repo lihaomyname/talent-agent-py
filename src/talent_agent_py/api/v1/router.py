@@ -13,6 +13,7 @@ from talent_agent_py.api.schemas import PageRequest, SendMessageRequest
 from talent_agent_py.application.agent_service import AgentService
 from talent_agent_py.application.session_service import SessionService
 from talent_agent_py.domain.conversation import (
+    MessageHistoryView,
     MessageOutcome,
     RunView,
     SearchResult,
@@ -26,6 +27,14 @@ router = APIRouter()
 UserDep = Annotated[UserContext, Depends(get_user_context)]
 SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[MessageHistoryView])
+async def get_messages(
+    session_id: str, user: UserDep, service: SessionServiceDep
+) -> list[MessageHistoryView]:
+    """按顺序恢复当前用户的完整对话。"""
+    return await service.history(session_id, user)
 
 
 @router.post("/sessions", response_model=SessionView, status_code=status.HTTP_201_CREATED)

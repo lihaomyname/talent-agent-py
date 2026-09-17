@@ -219,12 +219,21 @@ class PlanPatch(StrictModel):
     schema_version: int = 1
     # 补丁基于的计划版本，应用前必须与当前版本一致。
     base_plan_version: int = Field(ge=0)
-    # 按顺序应用的修改指令。
-    operations: list[PlanPatchItem] = Field(min_length=1, max_length=30)
+    # 按顺序应用的修改指令；只有澄清或不支持条件时为空。
+    operations: list[PlanPatchItem] = Field(max_length=30)
     # 无法由当前搜索接口执行的条件，保留供用户澄清。
     unsupported_conditions: list[UnsupportedCondition] = Field(default_factory=list)
     # 阻塞执行的歧义，需用户回答后才能继续。
     ambiguities: list[Ambiguity] = Field(default_factory=list)
+
+
+    @model_validator(mode="after")
+    def validate_nonempty_patch(self) -> PlanPatch:
+        """允许先澄清，但拒绝没有操作也没有任何待处理条件的补丁。"""
+
+        if not (self.operations or self.unsupported_conditions or self.ambiguities):
+            raise ValueError("plan patch requires operations, unsupported conditions or ambiguities")
+        return self
 
 
 class SearchPlan(StrictModel):

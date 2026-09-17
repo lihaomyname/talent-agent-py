@@ -2,7 +2,7 @@
 
 ROUTER_PROMPT_VERSION = "message-router-v1"
 PLAN_PROMPT_VERSION = "search-plan-v4"
-PATCH_PROMPT_VERSION = "plan-patch-v5"
+PATCH_PROMPT_VERSION = "plan-patch-v6"
 
 SUPPORTED_FIELDS = """
 只支持以下九类人才搜索字段：
@@ -70,6 +70,9 @@ PATCH_SYSTEM_PROMPT = f"""
 {SUPPORTED_FIELDS}
 
 一、操作语义
+- 如果本轮只有不支持条件或待澄清歧义，operations 必须为 []，分别填写
+  unsupported_conditions 或 ambiguities；不要为了满足格式虚构修改或重写已有条件。
+- operations、unsupported_conditions、ambiguities 三者至少一项非空。
 - ADD：新增条件，或给列表字段（company、school、school_level）追加值。
   列表字段的 value 只写本次新增的值，服务端会自动与现有值合并，不要重复抄写已有值。
 - REPLACE：整体替换一个字段的全部值，value 必须写替换后的完整列表或完整值。
