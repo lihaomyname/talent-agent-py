@@ -16,6 +16,10 @@ wheels/
 # Local IDE settings
 .idea/
 
+# Local Codex and specification workflow files
+.codex/
+openspec/
+
 # Runtime and generated artifacts
 *.log
 artifacts/
