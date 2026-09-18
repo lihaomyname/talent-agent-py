@@ -12,3 +12,11 @@ wheels/
 *.db
 .pytest_cache/
 .coverage
+
+# Local IDE settings
+.idea/
+
+# Runtime and generated artifacts
+*.log
+artifacts/
+design-qa.md
