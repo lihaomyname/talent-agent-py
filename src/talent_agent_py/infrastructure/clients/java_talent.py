@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 import structlog
 
+from talent_agent_py.application.candidate_profiles import build_candidate_profile
 from talent_agent_py.application.exceptions import (
     TalentSearchDeniedError,
     TalentSearchDependencyError,
@@ -19,6 +20,7 @@ from talent_agent_py.application.ports.talent_search import (
 )
 from talent_agent_py.domain.conversation import CandidateCard, UserContext
 from talent_agent_py.domain.enums import EntityKind, EntityResolutionStatus
+from talent_agent_py.domain.matching import CandidateProfilePage
 from talent_agent_py.settings import Settings
 from talent_agent_py.telemetry import sanitize_log_value
 
@@ -99,7 +101,7 @@ class JavaTalentClient(TalentSearchPort):
             method="POST",
             path=path,
             status_code=response.status_code,
-            response=sanitize_log_value(data),
+            response_type=type(data).__name__,
         )
         return data
 
@@ -124,7 +126,7 @@ class JavaTalentClient(TalentSearchPort):
             method="GET",
             path=path,
             status_code=response.status_code,
-            response=sanitize_log_value(data),
+            response_type=type(data).__name__,
         )
         return data
 
@@ -297,3 +299,23 @@ class JavaTalentClient(TalentSearchPort):
                 "candidates": data["candidates"][: request.pageSize],
             }
         return TalentSearchResponse.model_validate(data, strict=False)
+
+    async def search_candidate_profiles(
+        self, request: TalentSearchRequest, user: UserContext
+    ) -> CandidateProfilePage:
+        """同一授权列表接口，匹配专用返回不进入 V1 卡片快照。"""
+
+        data = await self._post(
+            self._settings.java_search_path,
+            request.model_dump(mode="json", exclude_none=True), user,
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+            raise TalentSearchDependencyError("当前招聘接口没有提供可核验的经历列表")
+        profiles = []
+        for item in data["list"][:request.pageSize]:
+            if isinstance(item, dict):
+                profiles.append(build_candidate_profile(item, self._candidate_card(item), request.currentPage))
+        last = data.get("lastPage", data.get("isLastPage"))
+        if not isinstance(last, bool):
+            last = request.currentPage >= int(data.get("pages") or 0)
+        return CandidateProfilePage(candidates=profiles, total=int(data.get("total") or 0), has_next=not last)

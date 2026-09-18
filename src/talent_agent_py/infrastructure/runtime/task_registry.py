@@ -45,7 +45,11 @@ class TaskRegistry:
                     # 旧任务可能正在提交计划；必须等它完成受保护的数据库写入。
                     with suppress(asyncio.CancelledError):
                         await previous
-                return await operation_factory()
+                try:
+                    return await operation_factory()
+                finally:
+                    # 结束即释放任务闭包中的本轮凭据，不缓存业务资料。
+                    await self.remove(session_id, asyncio.current_task())
 
             task = asyncio.create_task(run_in_order())
             self._tasks[session_id] = task
@@ -60,6 +64,30 @@ class TaskRegistry:
                 return False
             task.cancel()
             return True
+
+    async def has_capacity(self, session_id: str, maximum: int) -> bool:
+        """只统计正在执行的会话；替换当前会话不占新名额。"""
+        async with self._lock:
+            active = {key for key, task in self._tasks.items() if not task.done()}
+            return session_id in active or len(active) < maximum
+
+    async def cancel_and_wait(self, session_id: str) -> None:
+        """模式交接前等待旧任务必要提交；不持有任务表锁等待。"""
+        async with self._lock:
+            task = self._tasks.get(session_id)
+            if task is not None and not task.done():
+                task.cancel()
+        if task is not None:
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            tasks = list(self._tasks.values())
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def remove(self, session_id: str, task: asyncio.Task) -> None:
         """仅移除仍指向该任务的注册项，避免旧任务删除新任务。"""

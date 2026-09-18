@@ -8,6 +8,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from talent_agent_py.application.matching_snapshots import read_search_plan, snapshot_kind
 from talent_agent_py.domain.conversation import ClarificationCard
 from talent_agent_py.domain.enums import RunStatus
 from talent_agent_py.domain.plan import SearchPlan, SearchPlanDraft
@@ -168,7 +169,7 @@ class PlanRepository:
             .limit(1)
         )
         record = await self.session.scalar(query)
-        return SearchPlan.model_validate(record.plan_json, strict=False) if record else None
+        return read_search_plan(record.plan_json) if record else None
 
     async def save(self, session_record: AgentSessionRecord, plan: SearchPlan) -> SearchPlan:
         """新增不可变计划快照、更新会话版本指针并返回原计划；事务退出时提交。"""
@@ -202,6 +203,8 @@ class ClarificationRepository:
             PendingClarificationRecord.session_id == session_id
         )
         record = await self.session.scalar(query)
+        if record and snapshot_kind(record.card_json) == "matching_draft":
+            return None
         return ClarificationCard.model_validate(record.card_json, strict=False) if record else None
 
     async def get_with_draft(
@@ -213,6 +216,8 @@ class ClarificationRepository:
             PendingClarificationRecord.session_id == session_id
         ))
         if not record:
+            return None
+        if snapshot_kind(record.card_json) == "matching_draft":
             return None
         draft = (
             SearchPlanDraft.model_validate(record.draft_json, strict=False)

@@ -59,6 +59,28 @@ async def test_expected_city_uses_string_representation():
     assert request.livePlace == []
 
 
+async def test_matching_profiles_reuse_page_contract_and_keep_legacy_cards_narrow():
+    async def handler(request):
+        return httpx.Response(200, json={"code": 200, "data": {"list": [{
+            "id": "synthetic", "applicantId": "synthetic", "applicantName": "测试人选",
+            "workYears": "2020-01-01", "mobile": "13800138000",
+            "resumeWorkExpList": [{"position": "战斗策划", "detail": "枪械后坐力调优",
+                                   "duty": "枪械后坐力调优", "startDate": "2020-01-01"}],
+        }], "pages": 2, "total": 11}})
+    async with httpx.AsyncClient(base_url="http://java.test", transport=httpx.MockTransport(handler)) as http:
+        adapter = JavaTalentClient(http, Settings(_env_file=None, java_requires_user_cookie=False))
+        profile_page = await adapter.search_candidate_profiles(TalentSearchRequest(), UserContext(user_id="u"))
+        cards = await adapter.search_candidates(TalentSearchRequest(), UserContext(user_id="u"))
+    assert profile_page.has_next is True
+    assert profile_page.total == 11
+    assert profile_page.candidates[0].card == cards.candidates[0]
+    paths = [source.path for source in profile_page.candidates[0].sources]
+    assert "resumeWorkExpList.0.detail" in paths
+    assert "resumeWorkExpList.0.duty" not in paths
+    assert "workYears" not in paths
+    assert "sources" not in cards.candidates[0].model_dump()
+
+
 async def test_browser_api_forwards_only_whitelisted_cookie_and_maps_page_result():
     captured = {}
 

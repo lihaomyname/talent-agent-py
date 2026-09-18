@@ -7,6 +7,8 @@ from collections.abc import Callable
 from sqlalchemy import select
 
 from talent_agent_py.application.exceptions import SessionNotFoundError
+from talent_agent_py.application.matching_snapshots import check_owner, read_snapshot, snapshot_kind
+from talent_agent_py.application.matching_store import owned_session
 from talent_agent_py.domain.conversation import (
     MessageHistoryView,
     MessageOutcome,
@@ -15,7 +17,12 @@ from talent_agent_py.domain.conversation import (
     SessionView,
     UserContext,
 )
-from talent_agent_py.infrastructure.persistence.models import MessageRecord, RunRecord
+from talent_agent_py.infrastructure.persistence.models import (
+    MessageRecord,
+    PendingClarificationRecord,
+    RunRecord,
+    SearchPlanRecord,
+)
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 
 
@@ -59,17 +66,33 @@ class SessionService:
         """查询会话、计划和待澄清卡；会话不存在或不归当前用户时抛出异常。"""
 
         async with self._uow_factory() as uow:
-            record = await uow.sessions.get_owned(session_id, user.user_id)
+            record = await owned_session(uow, session_id, user)
             if record is None:
                 raise SessionNotFoundError("会话不存在")
             plan = await uow.plans.get_current(session_id)
             clarification = await uow.clarifications.get(session_id)
+            matching_draft = None
+            pending = await uow.session.scalar(select(PendingClarificationRecord).where(
+                PendingClarificationRecord.session_id == session_id,
+            ))
+            if pending and pending.draft_json and snapshot_kind(pending.draft_json):
+                saved = read_snapshot(pending.draft_json)
+                check_owner(saved.owner_scope, session_id, user)
+                matching_draft = saved.model_dump(mode="json")
+            matching_requirements = None
+            latest = await uow.session.scalar(select(SearchPlanRecord).where(
+                SearchPlanRecord.session_id == session_id,
+            ).order_by(SearchPlanRecord.version.desc()).limit(1))
+            if latest and snapshot_kind(latest.plan_json):
+                matching_requirements = read_snapshot(latest.plan_json).requirements.model_dump(mode="json")
             return SessionView(
                 session_id=record.id,
                 active_run_id=record.active_run_id,
                 plan_version=record.current_plan_version,
                 current_plan=plan,
                 pending_clarification=clarification,
+                matching_draft=matching_draft,
+                matching_requirements=matching_requirements,
                 created_at=record.created_at,
                 updated_at=record.updated_at,
             )
@@ -78,8 +101,7 @@ class SessionService:
         """恢复用户消息和回复；旧数据从关联 Run 尽量补回搜索结果。"""
 
         async with self._uow_factory() as uow:
-            if await uow.sessions.get_owned(session_id, user.user_id) is None:
-                raise SessionNotFoundError("会话不存在")
+            await owned_session(uow, session_id, user)
             messages = (await uow.session.scalars(
                 select(MessageRecord).where(MessageRecord.session_id == session_id)
                 .order_by(MessageRecord.sequence)
@@ -96,12 +118,23 @@ class SessionService:
             for message in messages:
                 outcome = None
                 if message.outcome_json:
-                    outcome = MessageOutcome.model_validate(message.outcome_json, strict=False)
+                    if snapshot_kind(message.outcome_json):
+                        saved = read_snapshot(message.outcome_json)
+                        check_owner(saved.owner_scope, session_id, user)
+                        outcome = MessageOutcome(kind="STATUS", matching_reference={
+                            "run_id": saved.run_id, "requirement_id": saved.requirement_id,
+                            "plan_version": saved.plan_version,
+                        })
+                    else:
+                        outcome = MessageOutcome.model_validate(message.outcome_json, strict=False)
                 elif run := by_sequence.get(message.sequence):
-                    outcome = MessageOutcome(
-                        kind="RESULT",
-                        result=SearchResult.model_validate(run.result_json, strict=False),
-                        is_page=message.route_type == "PAGE_ACTION",
-                    )
+                    if snapshot_kind(run.result_json):
+                        saved = read_snapshot(run.result_json)
+                        check_owner(saved.owner_scope, session_id, user)
+                        outcome = MessageOutcome(kind="STATUS", matching_reference={"run_id": run.id})
+                    else:
+                        outcome = MessageOutcome(kind="RESULT",
+                            result=SearchResult.model_validate(run.result_json, strict=False),
+                            is_page=message.route_type == "PAGE_ACTION")
                 history.append(MessageHistoryView(content=message.content, outcome=outcome))
             return history

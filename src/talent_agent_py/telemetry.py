@@ -22,6 +22,9 @@ _SECRET_KEYS = {
     "password",
 }
 _PII_KEYS = {
+    "resumebaseappemail",
+    "resumebaseappmobile",
+    "wechat",
     "mobile",
     "phone",
     "telephone",
@@ -83,7 +86,7 @@ def sanitize_log_value(value: Any, *, key: str = "") -> Any:
     """递归保留业务明文，同时屏蔽认证凭据和候选人敏感信息。"""
 
     normalized_key = key.lower().replace("-", "").replace("_", "")
-    if normalized_key in {item.replace("_", "") for item in _SECRET_KEYS | _PII_KEYS}:
+    if normalized_key in {item.replace("_", "").replace("-", "") for item in _SECRET_KEYS | _PII_KEYS}:
         return "***已脱敏***"
     if isinstance(value, dict):
         return {
@@ -133,12 +136,16 @@ class RequestResponseLogMiddleware:
         request_body = bytearray()
         response_body = bytearray()
         status_code = 500
+        # 匹配和图片端点仅记录请求元数据，不采集图片、需求或候选人正文。
+        metadata_only = any(part in scope.get("path", "") for part in (
+            "/requirements", "/requirement-images", "/matches",
+        ))
 
         async def logged_receive() -> Message:
             """接收并暂存请求体片段，原样返回下游需要的 ASGI 消息。"""
 
             message = await receive()
-            if message["type"] == "http.request" and len(request_body) < _MAX_LOG_BODY_BYTES:
+            if not metadata_only and message["type"] == "http.request" and len(request_body) < _MAX_LOG_BODY_BYTES:
                 request_body.extend(message.get("body", b""))
             return message
 
@@ -148,7 +155,7 @@ class RequestResponseLogMiddleware:
             nonlocal status_code
             if message["type"] == "http.response.start":
                 status_code = message["status"]
-            elif message["type"] == "http.response.body" and len(response_body) < _MAX_LOG_BODY_BYTES:
+            elif not metadata_only and message["type"] == "http.response.body" and len(response_body) < _MAX_LOG_BODY_BYTES:
                 response_body.extend(message.get("body", b""))
             await send(message)
 

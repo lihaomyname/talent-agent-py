@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talent Agent · 自然语言找人</title>
+  <link rel="stylesheet" href="/static/vendor/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="/static/app.css?v=20260917-8">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>自然语言找人</h1>
+      <span>用一句话，找到合适的人才</span>
+    </div>
+    <button id="connectionButton" class="connection-button" type="button">
+      <span id="connectionDot" class="status-dot"></span>
+      <span id="connectionText">连接招聘系统</span>
+      <i class="bi bi-chevron-down" aria-hidden="true"></i>
+    </button>
+  </header>
+
+  <main class="workspace">
+    <aside class="sessions-panel">
+      <button id="newSessionButton" class="primary-button new-session" type="button">
+        <i class="bi bi-plus-lg" aria-hidden="true"></i>
+        新建对话
+      </button>
+      <div class="panel-label">历史对话</div>
+      <div id="sessionList" class="session-list"></div>
+    </aside>
+
+    <section class="conversation-panel">
+      <div id="conversation" class="conversation" aria-live="polite">
+        <div id="welcome" class="welcome-state">
+          <div class="welcome-mark"><i class="bi bi-person-bounding-box" aria-hidden="true"></i></div>
+          <h2>描述你想找的人</h2>
+          <p>支持姓名、职位、学历、工作年限、公司、学校、现居地、期望工作地和院校标签。</p>
+          <div class="example-list">
+            <button type="button" data-example="找5年以上Java后端，现居杭州，本科，在网易工作过">5年以上 Java 后端，现居杭州</button>
+            <button type="button" data-example="找浙江大学毕业、有网易工作经历的人">浙江大学毕业，有网易经历</button>
+            <button type="button" data-example="找期望在上海工作的硕士学历算法工程师">期望上海，硕士算法工程师</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea id="messageInput" rows="1" maxlength="4000" placeholder="继续提问，或输入新的搜索条件…"></textarea>
+          <button id="sendButton" class="send-button" type="button" aria-label="发送消息">
+            <i class="bi bi-send" aria-hidden="true"></i>
+            <span>发送</span>
+          </button>
+        </div>
+        <div class="composer-hint">Enter 发送 · Shift + Enter 换行</div>
+      </div>
+    </section>
+
+    <aside class="process-panel">
+      <div class="process-header">
+        <div>
+          <h2>Agent 执行过程</h2>
+          <span id="runStatus">等待搜索</span>
+        </div>
+        <button id="cancelButton" class="icon-button" type="button" title="停止当前搜索" disabled>
+          <i class="bi bi-stop-circle" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div id="nodeTimeline" class="node-timeline"></div>
+      <div class="request-section">
+        <button id="requestToggle" class="request-toggle" type="button">
+          <span><i class="bi bi-braces" aria-hidden="true"></i>搜索请求</span>
+          <i class="bi bi-chevron-up" aria-hidden="true"></i>
+        </button>
+        <pre id="requestPreview">尚未生成搜索请求</pre>
+      </div>
+    </aside>
+  </main>
+
+  <div id="configModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2 id="configTitle">连接招聘系统</h2>
+          <p>Cookie 仅保存在当前浏览器会话中，关闭浏览器后自动清除。</p>
+        </div>
+        <button id="closeModalButton" class="icon-button" type="button" aria-label="关闭">
+          <i class="bi bi-x-lg" aria-hidden="true"></i>
+        </button>
+      </div>
+      <label class="field-label" for="userIdInput">用户 ID</label>
+      <input id="userIdInput" class="text-input" type="text" maxlength="128" value="lihao" placeholder="用于 X-User-Id">
+      <label class="field-label" for="cookieInput">authOpenIdToken</label>
+      <div class="secret-input">
+        <input id="cookieInput" class="text-input" type="password" autocomplete="off" placeholder="粘贴招聘系统 Cookie 值">
+        <button id="toggleSecretButton" class="icon-button" type="button" aria-label="显示或隐藏 Cookie">
+          <i class="bi bi-eye" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div id="configError" class="form-error" role="alert"></div>
+      <div class="modal-actions">
+        <button id="disconnectButton" class="secondary-button" type="button">清除连接</button>
+        <button id="saveConfigButton" class="primary-button" type="button">保存并连接</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=20260917-8" defer></script>
+</body>
+</html>

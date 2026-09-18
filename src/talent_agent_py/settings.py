@@ -44,6 +44,27 @@ class Settings(BaseSettings):
     # 结构化输出校验失败后的最大修复次数。
     llm_repair_attempts: int = Field(default=1, ge=0, le=1)
 
+    # 新匹配入口独立开关；接入验收完成后再开启。
+    enable_matching: bool = False
+    # 图片模型独立配置，不向不同供应商自动转发文本模型密钥。
+    vision_model: str = "deepseek-flash"
+    vision_base_url: str | None = None
+    vision_api_key: SecretStr | None = None
+    vision_timeout_seconds: float = Field(default=30, gt=0, le=180)
+    image_max_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    image_max_pixels: int = Field(default=20_000_000, gt=0)
+    matching_target: int = Field(default=10, ge=1, le=10)
+    matching_max_pages: int = Field(default=5, ge=1, le=50)
+    matching_max_candidates: int = Field(default=50, ge=1, le=500)
+    matching_batch_size: int = Field(default=5, ge=1, le=5)
+    matching_max_model_attempts: int = Field(default=20, ge=1, le=100)
+    matching_deadline_seconds: float = Field(default=120, gt=0, le=600)
+    matching_max_rounds: int = Field(default=10, ge=1, le=100)
+    matching_max_total_candidates: int = Field(default=500, ge=1, le=5000)
+    matching_max_snapshot_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    matching_max_active_tasks: int = Field(default=100, ge=1, le=1000)
+    matching_max_input_calls: int = Field(default=4, ge=1, le=20)
+
     # 招聘系统服务地址。
     java_base_url: str = "http://localhost:8080"
     # 内部招聘接口的服务凭据；不使用时为空。

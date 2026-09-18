@@ -7,6 +7,7 @@ from pydantic import Field
 from talent_agent_py.domain.base import StrictModel
 from talent_agent_py.domain.conversation import CandidateCard, UserContext
 from talent_agent_py.domain.enums import EntityKind, EntityResolutionStatus
+from talent_agent_py.domain.matching import CandidateProfilePage
 
 
 class EntityResolutionRequest(StrictModel):
@@ -125,3 +126,10 @@ class TalentSearchPort(Protocol):
         user: UserContext,
     ) -> TalentSearchResponse:
         """在 Java 权限边界内搜索并返回脱敏人才卡。"""
+
+    async def search_candidate_profiles(
+        self,
+        request: TalentSearchRequest,
+        user: UserContext,
+    ) -> CandidateProfilePage:
+        """同一权限与分页契约下读取白名单资料，仅供证据匹配使用。"""

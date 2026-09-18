@@ -26,6 +26,7 @@ def build_client(tmp_path, llm=None, talent=None):
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'agent.db'}",
         auto_create_schema=True,
+        enable_matching=False,
     )
     app = create_app(
         settings,
@@ -370,7 +371,7 @@ async def test_slow_page_cannot_replace_new_search(tmp_path):
 
     app = create_app(
         Settings(database_url=f"sqlite+aiosqlite:///{tmp_path / 'pages.db'}",
-                 auto_create_schema=True),
+                 auto_create_schema=True, enable_matching=False),
         llm_client=FakeLLMClient(), talent_search_client=SlowPage(),
     )
     async with app.router.lifespan_context(app):
@@ -409,6 +410,7 @@ async def test_search_message_interrupts_model_parsing_and_replaces_run(tmp_path
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'interrupt.db'}",
         auto_create_schema=True,
+        enable_matching=False,
     )
     app = create_app(settings, llm_client=llm, talent_search_client=FakeTalentSearch())
     async with app.router.lifespan_context(app):
@@ -449,6 +451,7 @@ async def test_casual_message_keeps_active_search_running(tmp_path):
     settings = Settings(
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'casual.db'}",
         auto_create_schema=True,
+        enable_matching=False,
     )
     app = create_app(settings, llm_client=llm, talent_search_client=FakeTalentSearch())
     async with app.router.lifespan_context(app):
@@ -524,6 +527,7 @@ def test_disabled_feature_returns_service_unavailable(tmp_path):
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'disabled.db'}",
         auto_create_schema=True,
         enable_agent=False,
+        enable_matching=False,
     )
     app = create_app(
         settings,

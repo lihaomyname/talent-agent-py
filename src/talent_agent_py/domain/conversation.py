@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, JsonValue, SecretStr
 
 from talent_agent_py.domain.base import StrictModel
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
@@ -91,6 +91,8 @@ class SessionView(StrictModel):
     current_plan: SearchPlan | None = None
     # 待回答的澄清卡；没有阻塞问题时为空。
     pending_clarification: ClarificationCard | None = None
+    matching_draft: dict[str, JsonValue] | None = None
+    matching_requirements: dict[str, JsonValue] | None = None
     # 记录创建时间。
     created_at: datetime
     # 记录最近更新时间。
@@ -198,6 +200,7 @@ class MessageOutcome(StrictModel):
     # CHAT 分支的文本回复；其他分支通常为空。
     reply: str | None = None
     is_page: bool = False
+    matching_reference: dict[str, JsonValue] | None = None
 
 
 class MessageHistoryView(StrictModel):
