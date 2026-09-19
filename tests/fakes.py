@@ -60,10 +60,10 @@ class FakeLLMClient:
             await asyncio.sleep(self.delay)
         text = " ".join(messages)
         unsupported = []
-        if "支付系统" in text:
+        if "北美工作" in text:
             unsupported.append(UnsupportedCondition(
-                original_text="支付系统经验",
-                reason="V1不支持项目经验筛选",
+                original_text="在北美工作过",
+                reason="当前资料不包含可靠的历史工作地点",
             ))
         unresolved_location = None
         current_city = None

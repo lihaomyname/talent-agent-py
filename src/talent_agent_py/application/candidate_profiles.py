@@ -2,7 +2,7 @@
 
 import re
 
-from talent_agent_py.domain.conversation import CandidateCard
+from talent_agent_py.domain.conversation import CandidateCard, ExperienceView
 from talent_agent_py.domain.matching import (
     CandidateEvaluation,
     CandidateProfile,
@@ -17,6 +17,44 @@ def clean_profile_text(value: object) -> str:
     text = re.sub(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}", "[邮箱已隐藏]", text)
     text = re.sub(r"(?<!\d)\+?\d[\d -]{9,}\d(?!\d)", "[号码已隐藏]", text)
     return text.strip()
+
+
+def build_experience_views(item: dict) -> list[ExperienceView]:
+    """把招聘接口的经历记录整理成页面可以直接阅读的条目。"""
+
+    views: list[ExperienceView] = []
+    groups = (
+        ("resumeWorkExpList", "WORK", ("company", "position"), ("detail", "duty")),
+        ("resumeEducationList", "EDUCATION", ("schoolName", "majorName", "degreeName"), ()),
+    )
+    for group, category, title_fields, detail_fields in groups:
+        records = item.get(group) or []
+        if not isinstance(records, list):
+            continue
+        for index, record in enumerate(records[:20]):
+            if not isinstance(record, dict):
+                continue
+            title = " · ".join(
+                value for field in title_fields if (value := clean_profile_text(record.get(field)))
+            )
+            start = clean_profile_text(record.get("startDate"))
+            end = clean_profile_text(record.get("endDate")) or "至今"
+            period = " — ".join(value for value in (start, end) if value)
+            details: list[str] = []
+            for field in detail_fields:
+                value = clean_profile_text(record.get(field))
+                if value and value not in details:
+                    details.append(value)
+            lines = [value for value in (title, period, *details) if value]
+            if lines:
+                views.append(
+                    ExperienceView(
+                        category=category,
+                        path=f"{group}.{index}",
+                        text="\n".join(lines),
+                    )
+                )
+    return views
 
 
 def build_candidate_profile(item: dict, card: CandidateCard, page: int) -> CandidateProfile:

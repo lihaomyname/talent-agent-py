@@ -5,7 +5,10 @@ from typing import Any
 import httpx
 import structlog
 
-from talent_agent_py.application.candidate_profiles import build_candidate_profile
+from talent_agent_py.application.candidate_profiles import (
+    build_candidate_profile,
+    build_experience_views,
+)
 from talent_agent_py.application.exceptions import (
     TalentSearchDeniedError,
     TalentSearchDependencyError,
@@ -160,6 +163,18 @@ class JavaTalentClient(TalentSearchPort):
         return body
 
     @staticmethod
+    def _display_text(value: object) -> str | None:
+        """兼容招聘接口中同一展示字段可能返回字符串或字符串数组。"""
+
+        if value is None:
+            return None
+        if isinstance(value, list):
+            values = [str(item).strip() for item in value if str(item).strip()]
+            return "、".join(values) or None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
     def _candidate_card(item: dict[str, Any]) -> CandidateCard:
         """把宽版 TalentResumeVO 收敛为不含联系方式的安全候选人卡片。"""
 
@@ -177,11 +192,16 @@ class JavaTalentClient(TalentSearchPort):
                 break
         return CandidateCard(
             candidate_id=str(raw_id),
-            display_name=item.get("applicantName"),
-            headline=item.get("nowPosition"),
-            current_company=item.get("nowCompany"),
-            current_city=item.get("livePlaceName"),
+            display_name=JavaTalentClient._display_text(item.get("applicantName")),
+            headline=JavaTalentClient._display_text(item.get("nowPosition")),
+            current_company=JavaTalentClient._display_text(item.get("nowCompany")),
+            work_years=JavaTalentClient._display_text(item.get("workYearsStr")),
+            highest_degree=JavaTalentClient._display_text(item.get("topDegreeName")),
+            highest_school=JavaTalentClient._display_text(item.get("topSchool")),
+            current_city=JavaTalentClient._display_text(item.get("livePlaceName")),
+            expected_city=JavaTalentClient._display_text(item.get("expectWorkPlaceName")),
             highlights=highlights,
+            experiences=build_experience_views(item),
         )
 
     async def resolve_entities(

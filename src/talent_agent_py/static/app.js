@@ -419,7 +419,7 @@ class TalentAgentPage {
     }
     if (result.executed_conditions) {
       this.appendAssistantText("已理解你的需求，以下是本轮实际执行的搜索计划：");
-      this.appendPlan(result.executed_conditions);
+      this.appendPlan(result.executed_conditions, result.executed_preferences || []);
       this.elements.requestPreview.textContent = JSON.stringify(
         this.buildRequestPreview(result), null, 2,
       );
@@ -512,11 +512,14 @@ class TalentAgentPage {
     return row.root;
   }
 
-  appendPlan(conditions) {
+  appendPlan(conditions, preferences = []) {
     const row = this.createMessageRow("assistant", "AI");
     const block = document.createElement("div");
     block.className = "plan-block";
     const items = this.conditionItems(conditions);
+    if (preferences.length) {
+      items.push(["偏好条件", preferences.map((item) => item.description).join("、")]);
+    }
     block.innerHTML = `
       <div class="block-title"><i class="bi bi-bullseye" aria-hidden="true"></i>SearchPlan</div>
       <dl class="condition-grid">
@@ -577,26 +580,37 @@ class TalentAgentPage {
     `;
     result.candidates.forEach((candidate) => {
       const hasPreference = (candidate.preference_evidence || []).length > 0;
-      const item = document.createElement(hasPreference ? "details" : "div");
-      item.className = hasPreference ? "candidate-row candidate-expandable" : "candidate-row";
+      const item = document.createElement("details");
+      item.className = "candidate-row candidate-expandable";
       const name = candidate.display_name || "候选人";
-      const summary = document.createElement(hasPreference ? "summary" : "div");
+      const summary = document.createElement("summary");
       summary.className = "candidate-summary";
       const preferenceTags = (candidate.preference_evidence || []).map((evidence) =>
         `<span>${this.escapeHtml(evidence.preference)}</span>`).join("");
       summary.innerHTML = `
         <div class="candidate-avatar">${this.escapeHtml(name.slice(0, 1))}</div>
         <div class="candidate-main">
-          <div class="candidate-name">${this.escapeHtml(name)}</div>
+          <div class="candidate-name-line">
+            <div class="candidate-name">${this.escapeHtml(name)}</div>
+            ${preferenceTags ? `<div class="candidate-tags preference-tags">${preferenceTags}</div>` : ""}
+          </div>
           <div class="candidate-meta">${this.escapeHtml(candidate.headline || "职位暂未填写")}${candidate.current_company ? ` · ${this.escapeHtml(candidate.current_company)}` : ""}</div>
-          <div class="candidate-tags">${preferenceTags || (candidate.highlights || []).map((tag) => `<span>${this.escapeHtml(tag)}</span>`).join("")}</div>
+          <div class="candidate-facts">
+            <span><b>工作年限</b>${this.escapeHtml(candidate.work_years || "--")}</span>
+            <span><b>最高学历</b>${this.escapeHtml(candidate.highest_degree || "--")}</span>
+            <span><b>毕业院校</b>${this.escapeHtml(candidate.highest_school || "--")}</span>
+          </div>
+          ${(candidate.highlights || []).length ? `<div class="candidate-tags">${candidate.highlights.map((tag) => `<span>${this.escapeHtml(tag)}</span>`).join("")}</div>` : ""}
         </div>
-        <div class="candidate-city">${this.escapeHtml(candidate.current_city || "")}</div>
+        <div class="candidate-locations">
+          <span><b>现居地</b>${this.escapeHtml(candidate.current_city || "--")}</span>
+          <span><b>期望工作地</b>${this.escapeHtml(candidate.expected_city || "--")}</span>
+        </div>
       `;
       item.append(summary);
+      const detail = document.createElement("div");
+      detail.className = "candidate-detail";
       if (hasPreference) {
-        const detail = document.createElement("div");
-        detail.className = "candidate-detail";
         const reasons = document.createElement("section");
         reasons.innerHTML = "<h4>推荐依据</h4>";
         for (const evidence of candidate.preference_evidence) {
@@ -607,20 +621,27 @@ class TalentAgentPage {
           reasons.append(line);
         }
         detail.append(reasons);
-        for (const [category, title] of [["WORK", "工作经历"], ["EDUCATION", "教育经历"]]) {
-          const experiences = (candidate.experiences || []).filter((item) => item.category === category);
-          if (!experiences.length) continue;
-          const section = document.createElement("section");
-          section.innerHTML = `<h4>${title}</h4>`;
+      }
+      for (const [category, title] of [["WORK", "工作经历"], ["EDUCATION", "教育经历"]]) {
+        const experiences = (candidate.experiences || []).filter((experience) => experience.category === category);
+        const section = document.createElement("section");
+        section.innerHTML = `<h4>${title}</h4>`;
+        if (experiences.length) {
           experiences.forEach((experience) => {
             const line = document.createElement("p");
+            line.className = "candidate-experience";
             line.textContent = experience.text;
             section.append(line);
           });
-          detail.append(section);
+        } else {
+          const empty = document.createElement("p");
+          empty.className = "candidate-detail-empty";
+          empty.textContent = "暂无记录";
+          section.append(empty);
         }
-        item.append(detail);
+        detail.append(section);
       }
+      item.append(detail);
       block.append(item);
     });
     if (result.next_page || result.page > 1) {

@@ -23,6 +23,7 @@ from talent_agent_py.application.plan_validation import (
 from talent_agent_py.application.ports.llm import LLMClient
 from talent_agent_py.application.ports.talent_search import TalentSearchPort
 from talent_agent_py.application.preference_matcher import PreferenceMatcher
+from talent_agent_py.application.preference_normalizer import normalize_preferences
 from talent_agent_py.application.search_compiler import compile_search_request
 from talent_agent_py.domain.conversation import PageReference, SearchResult
 from talent_agent_py.domain.enums import MessageType, ResultStatus, RunStatus
@@ -165,6 +166,7 @@ class TalentSearchNodes:
                 state["messages"],
                 previous_conditions=current_plan.conditions,
             )
+            draft = normalize_preferences(draft)
             return {"patch": patch, "draft": draft}
 
         EXTERNAL_CALLS.labels("llm", "parse_search_draft").inc()
@@ -175,6 +177,7 @@ class TalentSearchNodes:
             raise
         PARSE_OUTCOMES.labels("search_draft", "success").inc()
         draft = enforce_location_scope_clarification(draft, state["messages"])
+        draft = normalize_preferences(draft)
         return {"draft": draft}
 
     async def validate(self, state: AgentState) -> ValidationOutput:
@@ -376,6 +379,7 @@ class TalentSearchNodes:
             total=response.total,
             next_page=next_page,
             executed_conditions=plan.conditions,
+            executed_preferences=list(plan.preferences),
             message=(
                 f"已按 {len(plan.preferences)} 项偏好检查候选人，只展示有匹配证据的人选。"
                 if plan.preferences

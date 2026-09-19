@@ -7,7 +7,7 @@ from pydantic import Field, SecretStr
 
 from talent_agent_py.domain.base import StrictModel
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
-from talent_agent_py.domain.plan import SearchConditions, SearchPlan
+from talent_agent_py.domain.plan import Preference, SearchConditions, SearchPlan
 
 
 class UserContext(StrictModel):
@@ -173,8 +173,15 @@ class CandidateCard(StrictModel):
     headline: str | None = None
     # 当前公司展示名称；接口未提供时为空。
     current_company: str | None = None
+    # 招聘接口计算好的工作年限文案，例如“5年6个月”。
+    work_years: str | None = None
+    # 候选人最高学历和对应院校。
+    highest_degree: str | None = None
+    highest_school: str | None = None
     # 当前居住地展示名称；接口未提供时为空。
     current_city: str | None = None
+    # 候选人的期望工作地；接口未提供时为空。
+    expected_city: str | None = None
     # 招聘接口返回的候选人摘要亮点，不由模型补造。
     highlights: list[str] = Field(default_factory=list, max_length=20)
     # 普通搜索为空；偏好搜索时用于同一卡片增加标签和推荐依据。
@@ -202,6 +209,8 @@ class SearchResult(StrictModel):
     next_page: PageReference | None = None
     # 结果附带的计划条件；未有可用计划时为空。
     executed_conditions: SearchConditions | None = None
+    # 本轮实际用于结果匹配和排序的偏好。
+    executed_preferences: list[Preference] = Field(default_factory=list)
     # 本轮需要回答的澄清卡；无澄清时为空。
     clarification: ClarificationCard | None = None
     # 停止、替代或失败等情况下的用户提示。

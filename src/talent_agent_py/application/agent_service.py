@@ -652,6 +652,7 @@ class AgentService:
             total=response.total,
             next_page=next_page,
             executed_conditions=plan.conditions,
+            executed_preferences=list(plan.preferences),
         )
         async with self._uow_factory() as uow:
             await uow.runs.update(

@@ -218,7 +218,7 @@ def test_unsupported_condition_returns_card_without_search(tmp_path):
         response = client.post(
             f"/api/v1/sessions/{session_id}/messages",
             headers=headers,
-            json={"client_message_id": "m1", "content": "找Java后端，必须有支付系统经验"},
+            json={"client_message_id": "m1", "content": "找Java后端，必须在北美工作过"},
         ).json()
         assert response["result"]["status"] == "UNSUPPORTED"
         assert response["result"]["clarification"]["kind"] == "UNSUPPORTED_CONDITION"
@@ -547,7 +547,7 @@ def test_disabled_feature_returns_service_unavailable(tmp_path):
 
 
 @pytest.mark.parametrize("pending, expected_status, answer_value", [
-    ({"unsupported_conditions": [{"original_text": "支付系统经验", "reason": "不支持"}]},
+    ({"unsupported_conditions": [{"original_text": "在北美工作过", "reason": "不支持"}]},
      "UNSUPPORTED", "IGNORE"),
     ({"ambiguities": [{"field": "minimum_degree", "reason": "学历再高一点需确认",
                        "options": ["硕士", "博士"]}]},
