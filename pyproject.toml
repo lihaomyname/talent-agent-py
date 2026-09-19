@@ -13,6 +13,7 @@ dependencies = [
     "asyncmy>=0.2.14",
     "asyncpg>=0.30.0",
     "cryptography>=46.0.0",
+    "docling>=2.126.0",
     "fastapi>=0.116.0",
     "httpx>=0.28.0",
     "langchain-openai>=1.0.0",
@@ -21,8 +22,10 @@ dependencies = [
     "prometheus-client>=0.22.0",
     "pydantic-settings>=2.10.0",
     "python-multipart>=0.0.32",
+    "requests>=2.32.0",
     "sqlalchemy[asyncio]>=2.0.40",
     "structlog>=25.4.0",
+    "transformers>=5.16.1",
     "uvicorn[standard]>=0.35.0",
 ]
 

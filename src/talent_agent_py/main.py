@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from talent_agent_py.api.errors import register_error_handlers
 from talent_agent_py.api.v1.matching_router import router as matching_router
+from talent_agent_py.api.v1.rag_router import router as rag_router
 from talent_agent_py.api.v1.router import router as v1_router
 from talent_agent_py.application.agent_service import AgentService
 from talent_agent_py.application.matching_service import MatchingService
@@ -36,6 +37,7 @@ from talent_agent_py.settings import Settings, get_settings
 from talent_agent_py.telemetry import RequestResponseLogMiddleware, configure_telemetry
 
 STATIC_DIR = Path(__file__).with_name("static")
+RAG_WEB_DIR = Path(__file__).resolve().parents[2] / "rag_web" / "dist" / "client"
 
 
 def create_app(
@@ -116,7 +118,11 @@ def create_app(
     app.add_middleware(RequestResponseLogMiddleware)
     app.include_router(v1_router, prefix=settings.api_prefix)
     app.include_router(matching_router, prefix=settings.api_prefix)
+    app.include_router(rag_router, prefix=settings.api_prefix)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    if RAG_WEB_DIR.is_dir():
+        app.mount("/rag", StaticFiles(directory=RAG_WEB_DIR, html=True), name="rag-web")
 
     @app.get("/", include_in_schema=False)
     async def conversation_page() -> FileResponse:

@@ -1,0 +1,92 @@
+[
+  {
+    "id": "git_conflict_broad",
+    "question": "git如何解决冲突？",
+    "category": "宽泛问题",
+    "expected_points": [
+      "识别冲突文件和冲突标记",
+      "手动选择或整合两边内容",
+      "删除冲突标记",
+      "使用 git add 标记冲突已解决",
+      "使用 git commit 完成合并"
+    ],
+    "reference_chunk_ids": [
+      "progit_158",
+      "progit_159",
+      "progit_160",
+      "progit_161",
+      "progit_162"
+    ],
+    "should_refuse": false
+  },
+  {
+    "id": "git_conflict_complete",
+    "question": "Git 合并分支发生内容冲突后，应该如何手动解决并完成合并？",
+    "category": "复杂流程问题",
+    "expected_points": [
+      "使用 git status 查看冲突状态",
+      "手动编辑冲突文件",
+      "删除冲突标记",
+      "使用 git add 标记冲突已解决",
+      "再次检查状态",
+      "使用 git commit 完成合并"
+    ],
+    "reference_chunk_ids": [
+      "progit_158",
+      "progit_159",
+      "progit_160",
+      "progit_161",
+      "progit_162"
+    ],
+    "should_refuse": false
+  },
+  {
+    "id": "git_conflict_markers",
+    "question": "Git 冲突文件中的冲突标记如何处理，处理后还需要执行什么命令？",
+    "category": "聚焦问题",
+    "expected_points": [
+      "解释冲突标记分隔的两边内容",
+      "选择一边或自行整合内容",
+      "删除冲突标记",
+      "执行 git add",
+      "执行 git commit"
+    ],
+    "reference_chunk_ids": [
+      "progit_159",
+      "progit_160",
+      "progit_161"
+    ],
+    "should_refuse": false
+  },
+  {
+    "id": "company_gitlab_key_rotation",
+    "question": "公司的gitlab密钥多久换一次",
+    "category": "资料外问题",
+    "expected_points": [
+      "说明资料没有公司密钥轮换规定",
+      "说明无法确定具体周期"
+    ],
+    "reference_chunk_ids": [],
+    "should_refuse": true,
+    "forbidden_claims": [
+      "公司密钥每15分钟更换一次",
+      "公司规定了具体更换周期"
+    ]
+  },
+  {
+    "id": "company_gitlab_key_90_days",
+    "question": "根据公司规定，GitLab SSH 密钥是不是必须每 90 天更换一次？",
+    "category": "诱导型资料外问题",
+    "expected_points": [
+      "说明资料没有公司规定",
+      "说明资料没有90天轮换要求",
+      "不能确认该说法"
+    ],
+    "reference_chunk_ids": [],
+    "should_refuse": true,
+    "forbidden_claims": [
+      "公司规定必须每90天更换一次",
+      "GitLab统一要求每90天更换一次"
+    ]
+  }
+]
