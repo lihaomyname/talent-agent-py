@@ -22,6 +22,7 @@ from talent_agent_py.application.plan_validation import (
 )
 from talent_agent_py.application.ports.llm import LLMClient
 from talent_agent_py.application.ports.talent_search import TalentSearchPort
+from talent_agent_py.application.preference_matcher import PreferenceMatcher
 from talent_agent_py.application.search_compiler import compile_search_request
 from talent_agent_py.domain.conversation import PageReference, SearchResult
 from talent_agent_py.domain.enums import MessageType, ResultStatus, RunStatus
@@ -70,6 +71,8 @@ class GraphDependencies:
     talent_search: TalentSearchPort
     # 搜索分页和默认策略等运行配置。
     settings: Settings
+    # 有偏好时调用；普通搜索不经过偏好匹配。
+    preference_matcher: PreferenceMatcher
 
 
 class TalentSearchNodes:
@@ -143,6 +146,11 @@ class TalentSearchNodes:
             try:
                 draft = SearchPlanDraft(
                     conditions=apply_plan_patch(current_plan.conditions, patch),
+                    preferences=(
+                        list(current_plan.preferences)
+                        if patch.preferences is None
+                        else patch.preferences
+                    ),
                     unsupported_conditions=patch.unsupported_conditions,
                     ambiguities=patch.ambiguities,
                 )
@@ -151,9 +159,7 @@ class TalentSearchNodes:
                     f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
                     for error in exc.errors()[:3]
                 )
-                raise ModelOutputError(
-                    f"大模型生成的计划修改字段结构不正确：{details}"
-                ) from exc
+                raise ModelOutputError(f"大模型生成的计划修改字段结构不正确：{details}") from exc
             draft = enforce_location_scope_clarification(
                 draft,
                 state["messages"],
@@ -216,8 +222,7 @@ class TalentSearchNodes:
         elif state["validation"].ambiguities:
             ambiguity = state["validation"].ambiguities[0]
             entity_options = ambiguity.entity_options or [
-                ResolvedEntity(code=option, label=option)
-                for option in ambiguity.options
+                ResolvedEntity(code=option, label=option) for option in ambiguity.options
             ]
             card = (
                 entity_ambiguity_card(field=ambiguity.field, options=entity_options)
@@ -295,6 +300,7 @@ class TalentSearchNodes:
             version=(current.version + 1) if current else 1,
             applied_through_message_seq=state["trigger_message_sequence"],
             conditions=state["draft"].conditions,
+            preferences=tuple(state["draft"].preferences),
             unsupported_conditions=tuple(state["draft"].unsupported_conditions),
         )
         async with self._deps.uow_factory() as uow:
@@ -315,9 +321,7 @@ class TalentSearchNodes:
         """
 
         return {
-            "search_request": compile_search_request(
-                state["current_plan"], self._deps.settings
-            )
+            "search_request": compile_search_request(state["current_plan"], self._deps.settings)
         }
 
     @interruptible
@@ -332,9 +336,15 @@ class TalentSearchNodes:
         RUN_STAGES.labels("search_candidates").inc()
         started = time.perf_counter()
         try:
-            response = await self._deps.talent_search.search_candidates(
-                state["search_request"], state["user"]
-            )
+            plan = state["current_plan"]
+            if plan.preferences:
+                response = await self._deps.preference_matcher.match(
+                    state["search_request"], plan.preferences, state["user"]
+                )
+            else:
+                response = await self._deps.talent_search.search_candidates(
+                    state["search_request"], state["user"]
+                )
         finally:
             JAVA_LATENCY.labels("search_candidates").observe(time.perf_counter() - started)
         return {"search_response": response}
@@ -351,7 +361,7 @@ class TalentSearchNodes:
         status = ResultStatus.OK if response.candidates else ResultStatus.EMPTY
         next_page = None
         # 分页引用绑定计划版本，避免改条件后继续翻阅旧计划的结果。
-        if response.has_next:
+        if response.has_next and not plan.preferences:
             next_page = PageReference(
                 session_id=state["session_id"],
                 plan_version=plan.version,
@@ -366,6 +376,11 @@ class TalentSearchNodes:
             total=response.total,
             next_page=next_page,
             executed_conditions=plan.conditions,
+            message=(
+                f"已按 {len(plan.preferences)} 项偏好检查候选人，只展示有匹配证据的人选。"
+                if plan.preferences
+                else None
+            ),
         )
         async with self._deps.uow_factory() as uow:
             session_record = await uow.sessions.get_owned(

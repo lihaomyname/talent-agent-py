@@ -297,6 +297,19 @@ button { color: inherit; }
 .matching-group { margin: 8px 0; border: 1px solid #e2e8f0; border-radius: 8px; }
 .matching-group > summary { padding: 10px 12px; font-weight: 650; cursor: pointer; }
 .matching-preference { margin: 0; padding: 8px 12px; border-top: 1px solid #f1f5f9; line-height: 1.55; }
+
+.candidate-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; }
+.candidate-row > .candidate-summary { grid-column: 1 / -1; }
+.candidate-expandable { padding: 0; }
+.candidate-expandable > summary { padding: 18px; cursor: pointer; list-style: none; }
+.candidate-expandable > summary::-webkit-details-marker { display: none; }
+.candidate-expandable > summary::after { content: "⌄"; color: #64748b; font-size: 18px; margin-left: 8px; }
+.candidate-expandable[open] > summary::after { transform: rotate(180deg); }
+.candidate-main { min-width: 0; }
+.candidate-detail { margin: 0 18px 18px 66px; padding: 16px 18px; border-radius: 10px; background: #f8fafc; color: #334155; }
+.candidate-detail section + section { margin-top: 18px; }
+.candidate-detail h4 { margin: 0 0 10px; color: #172033; }
+.candidate-detail p { margin: 7px 0; line-height: 1.65; }
 .matching-candidate { margin-top: 10px; overflow: hidden; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
 .matching-candidate > summary { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px 14px; cursor: pointer; list-style-position: outside; }
 .matching-candidate > summary:hover { background: #f8fafc; }

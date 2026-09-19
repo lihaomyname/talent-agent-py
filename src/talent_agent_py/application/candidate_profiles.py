@@ -8,8 +8,8 @@ from talent_agent_py.domain.matching import (
     CandidateProfile,
     MatchEvidence,
     ProfileSource,
-    SearchRequirements,
 )
+from talent_agent_py.domain.plan import Preference
 
 
 def clean_profile_text(value: object) -> str:
@@ -49,21 +49,34 @@ def build_candidate_profile(item: dict, card: CandidateCard, page: int) -> Candi
                 if len(sources) >= 160:
                     incomplete = True
                     break
-                sources.append(ProfileSource(
-                    path=f"{group}.{index}.{field}", text=raw[:6000], truncated=len(raw) > 6000,
-                ))
+                sources.append(
+                    ProfileSource(
+                        path=f"{group}.{index}.{field}",
+                        text=raw[:6000],
+                        truncated=len(raw) > 6000,
+                    )
+                )
     return CandidateProfile(
-        candidate_id=card.candidate_id, card=card, source_page=page,
-        sources=sources, incomplete=incomplete or not item.get("resumeWorkExpList"),
+        candidate_id=card.candidate_id,
+        card=card,
+        source_page=page,
+        sources=sources,
+        incomplete=incomplete or not item.get("resumeWorkExpList"),
     )
 
 
 def validate_evaluation(
-    evaluation: CandidateEvaluation, profile: CandidateProfile, requirements: SearchRequirements
+    evaluation: CandidateEvaluation,
+    profile: CandidateProfile,
+    preferences: list[Preference] | tuple[Preference, ...],
 ) -> None:
-    expected = {item.id for item in requirements.required_criteria + requirements.preferences}
+    expected = {item.id for item in preferences}
     ids = [item.criterion_id for item in evaluation.evidence]
-    if evaluation.candidate_id != profile.candidate_id or set(ids) != expected or len(ids) != len(expected):
+    if (
+        evaluation.candidate_id != profile.candidate_id
+        or set(ids) != expected
+        or len(ids) != len(expected)
+    ):
         raise ValueError("候选人或要求 ID 不一致")
     sources = {source.path: source.text for source in profile.sources}
     for evidence in evaluation.evidence:
@@ -76,25 +89,30 @@ def validate_evaluation(
             raise ValueError("匹配证据引用不存在")
 
 
-def failed_evaluation(profile: CandidateProfile, requirements: SearchRequirements) -> CandidateEvaluation:
+def failed_evaluation(
+    profile: CandidateProfile, preferences: list[Preference] | tuple[Preference, ...]
+) -> CandidateEvaluation:
     return CandidateEvaluation(
-        candidate_id=profile.candidate_id, failed=True,
-        evidence=[MatchEvidence(
-            criterion_id=item.id, status="UNKNOWN", explanation="评估未完成，不能确认满足要求",
-        ) for item in requirements.required_criteria + requirements.preferences],
+        candidate_id=profile.candidate_id,
+        failed=True,
+        evidence=[
+            MatchEvidence(
+                criterion_id=item.id,
+                status="UNKNOWN",
+                explanation="评估未完成，不能确认满足要求",
+            )
+            for item in preferences
+        ],
     )
 
 
-def evaluation_rank(evaluation: CandidateEvaluation, requirements: SearchRequirements) -> tuple:
+def evaluation_rank(
+    evaluation: CandidateEvaluation, preferences: list[Preference] | tuple[Preference, ...]
+) -> tuple:
     by_id = {item.criterion_id: item.status for item in evaluation.evidence}
     if evaluation.failed:
         return (False, False, 0, 0)
-    hard = [by_id.get(item.id, "UNKNOWN") for item in requirements.required_criteria]
-    preferred = [by_id.get(item.id, "UNKNOWN") for item in requirements.preferences]
+    preferred = [by_id.get(item.id, "UNKNOWN") for item in preferences]
     supported_count = preferred.count("SUPPORTED")
     partial_count = preferred.count("PARTIAL")
-    if not hard and preferred:
-        return (supported_count + partial_count > 0, False, supported_count, partial_count)
-    eligible = all(status == "SUPPORTED" for status in hard)
-    pending = not eligible and "CONTRADICTED" not in hard
-    return (eligible, pending, supported_count, partial_count)
+    return (supported_count + partial_count > 0, False, supported_count, partial_count)

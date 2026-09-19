@@ -19,6 +19,7 @@ def _build_graph_for_drawing() -> CompiledStateGraph[AgentState, None, AgentStat
         llm=Mock(name="llm_client"),
         talent_search=Mock(name="talent_search_client"),
         settings=Mock(name="settings"),
+        preference_matcher=Mock(name="preference_matcher"),
     )
     return build_graph(dependencies)
 

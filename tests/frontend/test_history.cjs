@@ -72,37 +72,3 @@ test('refresh restores ordered messages and replies, then the current browsed pa
   await view.restoreSession();
   assert.deepEqual(events, ['reset', '找人', 'RESULT', '谢谢', 'CHAT', 3]);
 });
-
-test('matching references use matching renderer instead of adding status messages', () => {
-  const view = page();
-  const events = [];
-  view.watchMatch = (id, mode) => events.push([id, mode]);
-  view.appendAssistantText = () => assert.fail('must not append a separate status row');
-  view.renderOutcome({kind: 'STATUS', matching_reference: {run_id: 'matching-1', mode: 'MATCHING'}});
-  assert.deepEqual(events, [['matching-1', 'MATCHING']]);
-});
-
-test('refresh restores persisted requirement draft without browser draft storage', async () => {
-  const view = page();
-  const draft = {requirement_id: 'draft-1'};
-  view.api = async path => path.endsWith('/messages') ? [] : path.endsWith('/result') ? null : {matching_draft: draft};
-  view.resetConversation = view.appendAssistantText = () => {};
-  view.showGlobalError = error => assert.fail(error);
-  let restored;
-  view.renderRequirementDraft = value => restored = value;
-  await view.restoreSession();
-  assert.equal(restored, draft);
-});
-
-test('matching status updates the selected history item without replacing it with session id', () => {
-  const view = page();
-  view.sessions = [{id: 'session', title: '职位要求', meta: '暂无结果'}];
-  let saved = 0;
-  let rendered = 0;
-  view.saveSessions = () => saved += 1;
-  view.renderSessions = () => rendered += 1;
-  view.updateSessionMetaFor('session', '匹配完成 · 10 人 · 计划 v1');
-  assert.equal(view.sessions[0].meta, '匹配完成 · 10 人 · 计划 v1');
-  assert.equal(saved, 1);
-  assert.equal(rendered, 1);
-});

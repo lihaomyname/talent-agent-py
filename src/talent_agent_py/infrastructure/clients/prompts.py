@@ -1,8 +1,8 @@
 """V1 中文提示词模板及可追溯版本号。"""
 
 ROUTER_PROMPT_VERSION = "message-router-v1"
-PLAN_PROMPT_VERSION = "search-plan-v4"
-PATCH_PROMPT_VERSION = "plan-patch-v6"
+PLAN_PROMPT_VERSION = "search-plan-v5"
+PATCH_PROMPT_VERSION = "plan-patch-v7"
 
 SUPPORTED_FIELDS = """
 只支持以下九类人才搜索字段：
@@ -53,13 +53,15 @@ PLAN_SYSTEM_PROMPT = f"""
 - 工作年限必须有明确的方向语义：“3 年以上”填 minimum，“5 年以内”填 maximum，
   “3 到 5 年”同时填写；“5 年经验”这类没有方向的表达放入 ambiguities，
   不得自行解释为 5 年以上。
-- 项目经验、技能熟练度、支付系统经验、行业偏好等放入 unsupported_conditions。
+- 只有带“最好、优先、倾向、加分、有则更好”等软性表达的项目经验、技能、工具、
+  行业经验才放入 preferences，不得放入固定搜索条件，也不需要用户再次确认。
+- 每项 preference 必须保留用户原文 source_quote；id 使用简短、稳定的英文或拼音标识。
+- 用户明确说“必须、要求、需要”但当前接口不支持的条件，仍放入 unsupported_conditions。
 - “名校毕业”不能自行转换成 985、211 或双一流，放入 ambiguities。
 - “学历高、学历好、高学历”等模糊学历表达不能自行转换成任何具体学历，
   放入 ambiguities 并给出封闭选项 options = ["本科", "硕士", "博士"]，
   不得填写 minimum_degree。
-- “最好、优先、倾向、加分项”等软偏好不能直接作为硬性条件，
-  放入 ambiguities 由用户选择，或放入 unsupported_conditions。
+- “最好、优先、倾向、加分项”等软偏好直接放入 preferences，不生成歧义。
 - 关键硬条件不支持时不能静默忽略。
 - 只能返回结构化对象，不附加解释文本。
 """.strip()
@@ -72,7 +74,8 @@ PATCH_SYSTEM_PROMPT = f"""
 一、操作语义
 - 如果本轮只有不支持条件或待澄清歧义，operations 必须为 []，分别填写
   unsupported_conditions 或 ambiguities；不要为了满足格式虚构修改或重写已有条件。
-- operations、unsupported_conditions、ambiguities 三者至少一项非空。
+- preferences 为 null 表示保留当前偏好，[] 表示清空，非空列表表示完整替换。
+- operations、preferences、unsupported_conditions、ambiguities 至少一项发生变化。
 - ADD：新增条件，或给列表字段（company、school、school_level）追加值。
   列表字段的 value 只写本次新增的值，服务端会自动与现有值合并，不要重复抄写已有值。
 - REPLACE：整体替换一个字段的全部值，value 必须写替换后的完整列表或完整值。
@@ -101,14 +104,13 @@ PATCH_SYSTEM_PROMPT = f"""
 - “不要公司条件了”：REMOVE。
 
 四、解析边界（禁止越界转换）
-- “熟悉 Java”“有高并发经验”是技能或能力描述，不是职位，放入 unsupported_conditions。
-- “做过支付系统”是项目经历，放入 unsupported_conditions。
+- 带“最好、优先、倾向、加分、有则更好”等软性表达的技能、能力和项目经历放入
+  preferences；用户明确要求“必须”时才放入 unsupported_conditions。
 - “年轻”“稳定”等模糊表达不能转换成年龄、年限或公司数量，放入 unsupported_conditions。
 - “学历高、学历好、高学历”等模糊学历表达不能自行转换成任何具体学历，
   放入 ambiguities 并给出封闭选项 options = ["本科", "硕士", "博士"]，
   不得对 minimum_degree 生成操作。
-- “最好、优先、加分项”等软偏好不能直接作为硬条件，放入 ambiguities 或
-  unsupported_conditions。
+- 软偏好不作为硬条件、不阻塞搜索，直接更新 preferences。
 - 新增裸城市且上下文没有已确定的地点范围时，不能猜测现居或期望，必须输出地点歧义。
 
 五、安全

@@ -173,6 +173,14 @@ class Ambiguity(StrictModel):
     input_text: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class Preference(StrictModel):
+    """不参与招聘接口过滤、只用于简历证据匹配的一项偏好。"""
+
+    id: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=500)
+    source_quote: str = Field(min_length=1, max_length=500)
+
+
 class SearchPlanDraft(StrictModel):
     """Java 实体解析前的语义草稿。"""
 
@@ -180,6 +188,8 @@ class SearchPlanDraft(StrictModel):
     schema_version: int = 1
     # 本轮使用的九类受支持搜索条件。
     conditions: SearchConditions = Field(default_factory=SearchConditions)
+    # “最好、优先、加分”等软要求；不阻塞搜索，也不转换成硬筛选条件。
+    preferences: list[Preference] = Field(default_factory=list, max_length=20)
     # 城市已识别但现居或期望范围未知时保存的名称。
     unresolved_location: str | None = Field(default=None, min_length=1, max_length=100)
     # 无法由当前搜索接口执行的条件，保留供用户澄清。
@@ -221,18 +231,26 @@ class PlanPatch(StrictModel):
     base_plan_version: int = Field(ge=0)
     # 按顺序应用的修改指令；只有澄清或不支持条件时为空。
     operations: list[PlanPatchItem] = Field(max_length=30)
+    # None 表示保持原偏好；空列表表示清空；非空列表表示用完整列表替换。
+    preferences: list[Preference] | None = Field(default=None, max_length=20)
     # 无法由当前搜索接口执行的条件，保留供用户澄清。
     unsupported_conditions: list[UnsupportedCondition] = Field(default_factory=list)
     # 阻塞执行的歧义，需用户回答后才能继续。
     ambiguities: list[Ambiguity] = Field(default_factory=list)
 
-
     @model_validator(mode="after")
     def validate_nonempty_patch(self) -> PlanPatch:
         """允许先澄清，但拒绝没有操作也没有任何待处理条件的补丁。"""
 
-        if not (self.operations or self.unsupported_conditions or self.ambiguities):
-            raise ValueError("plan patch requires operations, unsupported conditions or ambiguities")
+        if not (
+            self.operations
+            or self.preferences is not None
+            or self.unsupported_conditions
+            or self.ambiguities
+        ):
+            raise ValueError(
+                "plan patch requires operations, preferences, unsupported conditions or ambiguities"
+            )
         return self
 
 
@@ -249,6 +267,8 @@ class SearchPlan(StrictModel):
     applied_through_message_seq: int = Field(ge=0)
     # 本轮使用的九类受支持搜索条件。
     conditions: SearchConditions
+    # 偏好与固定条件属于同一个计划，但不会编译到 Java 搜索请求中。
+    preferences: tuple[Preference, ...] = ()
     # 无法由当前搜索接口执行的条件，保留供用户澄清。
     unsupported_conditions: tuple[UnsupportedCondition, ...] = ()
 
@@ -290,9 +310,9 @@ def apply_plan_patch(current: SearchConditions, patch: PlanPatch) -> SearchCondi
         ):
             # ADD 在列表字段上与现有值合并，模型只需要提供新增的值。
             normalized_value = _merge_add_value(operation.field, values[key], normalized_value)
-        values[key] = model_type.model_validate(
-            normalized_value, strict=False
-        ).model_dump(mode="python")
+        values[key] = model_type.model_validate(normalized_value, strict=False).model_dump(
+            mode="python"
+        )
 
     return SearchConditions.model_validate(values)
 
@@ -343,8 +363,6 @@ def _normalize_patch_value(field: SupportedField, value: JsonValue | None) -> Js
         for alias in aliases:
             raw_value = normalized.pop(alias, None)
             if raw_value:
-                normalized[list_field] = (
-                    raw_value if isinstance(raw_value, list) else [raw_value]
-                )
+                normalized[list_field] = raw_value if isinstance(raw_value, list) else [raw_value]
                 break
     return normalized

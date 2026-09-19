@@ -24,7 +24,6 @@ from talent_agent_py.application.exceptions import (
     TalentSearchDeniedError,
     TalentSearchDependencyError,
 )
-from talent_agent_py.application.matching_snapshots import check_owner, read_snapshot, snapshot_kind
 from talent_agent_py.application.matching_store import owned_session
 from talent_agent_py.application.message_router import MessageRouter
 from talent_agent_py.application.ports.talent_search import TalentSearchPort
@@ -123,39 +122,6 @@ class AgentService:
 
         if not self._settings.enable_agent:
             raise FeatureDisabledError("当前环境尚未开启自然语言找人")
-        matching = getattr(self, "matching_service", None)
-        if matching and self._settings.enable_matching and clarification_answer is None:
-            active_id, plan, pending = await self._load_message_context(session_id, user)
-            if active_id and content.strip() in {"继续找10位", "继续找 10 位", "继续找人"}:
-                started = await matching.continue_run(session_id, active_id, user, client_message_id)
-                return MessageOutcome(kind="STATUS", matching_reference=started)
-            async with self._uow_factory() as uow:
-                duplicate = await uow.messages.get_by_client_id(session_id, client_message_id)
-                if duplicate and duplicate.outcome_json and snapshot_kind(duplicate.outcome_json):
-                    saved = read_snapshot(duplicate.outcome_json)
-                    check_owner(saved.owner_scope, session_id, user)
-                    return MessageOutcome(kind="STATUS", matching_reference={
-                        "run_id": saved.run_id, "requirement_id": saved.requirement_id,
-                    })
-            if duplicate is None and pending is None and self._has_preference_intent(content):
-                route = await self._router.route(message=content, current_plan=plan,
-                                                 has_pending_clarification=False)
-                if route.message_type in {MessageType.SEARCH_NEW, MessageType.SEARCH_PATCH}:
-                    draft = await matching.prepare(session_id, user, content, client_message_id)
-                    if draft.requirements.ambiguities or draft.requirements.interview_items:
-                        return MessageOutcome(kind="STATUS", matching_reference={
-                            "requirement_id": draft.requirement_id,
-                        })
-                    try:
-                        started = await matching.confirm(session_id, user, draft.requirement_id,
-                            "confirm-" + draft.requirement_id, draft.requirements)
-                    except StalePageReferenceError:
-                        # 条件缺失或实体不明确时保留草稿，由页面展示并让用户修改。
-                        return MessageOutcome(kind="STATUS", matching_reference={
-                            "requirement_id": draft.requirement_id,
-                        })
-                    return MessageOutcome(kind="STATUS", matching_reference=started)
-
         outcome = await self._handle_message(
             session_id=session_id, client_message_id=client_message_id,
             content=content, user=user, clarification_answer=clarification_answer,
@@ -175,16 +141,6 @@ class AgentService:
                 ):
                     message.outcome_json = outcome.model_dump(mode="json")
         return outcome
-
-    @staticmethod
-    def _has_preference_intent(content: str) -> bool:
-        """只有用户明确表达偏好时才进入候选证据匹配，普通搜索保持原流程。"""
-
-        preference_markers = (
-            "最好", "优先", "加分", "偏好", "更倾向", "优先考虑", "有则更好",
-        )
-        normalized = content.strip().lower()
-        return any(marker in normalized for marker in preference_markers)
 
     async def _handle_message(
         self,
@@ -211,10 +167,6 @@ class AgentService:
                 )
                 if not created:
                     if message.outcome_json:
-                        if snapshot_kind(message.outcome_json):
-                            saved = read_snapshot(message.outcome_json)
-                            check_owner(saved.owner_scope, session_id, user)
-                            return MessageOutcome(kind="STATUS", matching_reference={"run_id": saved.run_id})
                         return MessageOutcome.model_validate(message.outcome_json, strict=False)
                     existing_run = await uow.runs.get_by_trigger(session_id, message.sequence)
                     if existing_run and existing_run.result_json:
@@ -648,10 +600,6 @@ class AgentService:
             if not session_record.active_run_id:
                 return None
             run = await uow.runs.get(session_record.active_run_id)
-            if run and run.result_json and snapshot_kind(run.result_json):
-                saved = read_snapshot(run.result_json)
-                check_owner(saved.owner_scope, session_id, user)
-                return None
             return (
                 self._bounded_result(run.result_json)
                 if run and run.result_json else None
@@ -680,9 +628,6 @@ class AgentService:
             if plan is None or plan.version != reference.plan_version:
                 raise StalePageReferenceError("分页引用已失效")
             previous_run_id = session_record.active_run_id
-            active = await uow.runs.get(previous_run_id) if previous_run_id else None
-            if active and active.result_json and snapshot_kind(active.result_json):
-                raise StalePageReferenceError("匹配结果请使用继续找 10 位，不支持普通分页")
             run = await uow.runs.create(
                 session_record, None, activate=False
             )

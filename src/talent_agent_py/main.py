@@ -15,10 +15,10 @@ from talent_agent_py.api.errors import register_error_handlers
 from talent_agent_py.api.v1.matching_router import router as matching_router
 from talent_agent_py.api.v1.router import router as v1_router
 from talent_agent_py.application.agent_service import AgentService
-from talent_agent_py.application.matching_service import MatchingService
 from talent_agent_py.application.message_router import MessageRouter
 from talent_agent_py.application.ports.llm import LLMClient
 from talent_agent_py.application.ports.talent_search import TalentSearchPort
+from talent_agent_py.application.preference_matcher import PreferenceMatcher
 from talent_agent_py.application.session_service import SessionService
 from talent_agent_py.infrastructure.clients.internal_llm import (
     InternalLLMClient,
@@ -72,11 +72,13 @@ def create_app(
             """为一次业务操作创建独立事务单元。"""
 
             return UnitOfWork(database.session_factory)
+        matching_llm = matching_llm_client or MatchingLLMClient(settings, http_client)
         graph = build_graph(GraphDependencies(
             uow_factory=uow_factory,
             llm=llm,
             talent_search=talent_search,
             settings=settings,
+            preference_matcher=PreferenceMatcher(talent_search, matching_llm, settings),
         ))
         task_registry = TaskRegistry()
 
@@ -91,14 +93,7 @@ def create_app(
             task_registry=task_registry,
             settings=settings,
         )
-        app.state.matching_service = MatchingService(
-            uow_factory=uow_factory,
-            llm=matching_llm_client or MatchingLLMClient(settings, http_client),
-            talent_search=talent_search, tasks=task_registry, settings=settings,
-            message_lock=app.state.agent_service._message_write_lock,
-        )
-        await app.state.matching_service.recover()
-        app.state.agent_service.matching_service = app.state.matching_service
+        app.state.image_llm = matching_llm
         try:
             yield
         finally:

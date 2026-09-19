@@ -59,11 +59,6 @@ class Settings(BaseSettings):
     matching_batch_size: int = Field(default=5, ge=1, le=5)
     matching_max_model_attempts: int = Field(default=20, ge=1, le=100)
     matching_deadline_seconds: float = Field(default=120, gt=0, le=600)
-    matching_max_rounds: int = Field(default=10, ge=1, le=100)
-    matching_max_total_candidates: int = Field(default=500, ge=1, le=5000)
-    matching_max_snapshot_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
-    matching_max_active_tasks: int = Field(default=100, ge=1, le=1000)
-    matching_max_input_calls: int = Field(default=4, ge=1, le=20)
 
     # 招聘系统服务地址。
     java_base_url: str = "http://localhost:8080"

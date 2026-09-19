@@ -292,7 +292,6 @@ class TalentAgentPage {
         if (message.outcome) this.renderOutcome(message.outcome);
       });
       this.restoring = false;
-      if (session.matching_draft) this.renderRequirementDraft(session.matching_draft);
       if (!messages.length) this.appendAssistantText("可以继续描述你想找的人。");
       if (session.pending_clarification && !messages.some((message) =>
         message.outcome?.result?.clarification?.question_id === this.pendingQuestionId
@@ -403,16 +402,6 @@ class TalentAgentPage {
   }
 
   renderOutcome(outcome) {
-    if (outcome.matching_reference) {
-      const reference = outcome.matching_reference;
-      if (reference.run_id) this.watchMatch(reference.run_id, reference.mode);
-      else if (reference.requirement_id && !this.restoring) {
-        this.api(`/sessions/${this.sessionId}`).then((session) => {
-          if (session.matching_draft) this.renderRequirementDraft(session.matching_draft);
-        }).catch((error) => this.appendError(error.message));
-      }
-      return;
-    }
     if (outcome.kind === "CHAT") {
       this.appendAssistantText(outcome.reply || "收到。你可以继续描述搜索条件。");
       return;
@@ -502,260 +491,6 @@ class TalentAgentPage {
     }
   }
 
-  renderRequirementDraft(draft) {
-    const selector = `[data-requirement-id="${CSS.escape(draft.requirement_id)}"]`;
-    if (this.elements.conversation.querySelector(selector)) return;
-    const row = this.createMessageRow("assistant", "AI");
-    row.root.dataset.requirementId = draft.requirement_id;
-    const title = document.createElement("h3");
-    title.textContent = "确认搜索需求";
-    const source = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = "识别原文";
-    const original = document.createElement("pre");
-    original.textContent = draft.requirements.source_text;
-    source.append(summary, original);
-    row.content.append(title, source);
-    const requirements = structuredClone(draft.requirements);
-    const filterText = document.createElement("p");
-    filterText.className = "matching-filters";
-    filterText.textContent = `搜索条件：${this.conditionItems(requirements.conditions).map(([k, v]) => `${k}：${v}`).join("；") || "尚未指定，请在对话中补充"}`;
-    row.content.append(filterText);
-    requirements.preferences = [
-      ...requirements.required_criteria,
-      ...requirements.preferences,
-      ...requirements.interview_items,
-    ].filter((item, index, items) => items.findIndex((other) => other.id === item.id) === index);
-    requirements.required_criteria = [];
-    requirements.interview_items = [];
-    const groups = {
-      preferences: "偏好匹配（不淘汰候选人）",
-    };
-    for (const [group, label] of Object.entries(groups)) {
-      if (!requirements[group].length) continue;
-      const section = document.createElement("details");
-      section.className = "matching-group";
-      section.open = requirements[group].length <= 4;
-      const heading = document.createElement("summary");
-      heading.textContent = `${label}（${requirements[group].length}）`;
-      section.append(heading);
-      for (const criterion of requirements[group]) {
-        const line = document.createElement("p");
-        line.className = "matching-preference";
-        line.textContent = criterion.description;
-        section.append(line);
-      }
-      row.content.append(section);
-    }
-    const help = document.createElement("p");
-    help.className = "matching-help";
-    help.textContent = requirements.ambiguities.length
-      ? `待确认：${requirements.ambiguities.join("；")}。请在对话中补充后重新确认。`
-      : "固定搜索条件负责召回；以下内容只作为偏好排序。教育或工作经历未提及时显示“信息不足”，不会淘汰候选人。";
-    row.content.append(help);
-    if (requirements.ambiguities.length) {
-      const ambiguityText = requirements.ambiguities.join("；");
-      const choices = ambiguityText.includes("城市") || ambiguityText.includes("现居")
-        || ambiguityText.includes("期望工作")
-        ? [["现居住地", "待确认的城市按候选人现居住地处理"],
-          ["期望工作地", "待确认的城市按候选人期望工作地处理"]]
-        : ambiguityText.includes("学历")
-          ? [["本科及以上", "最低学历设为本科"], ["硕士及以上", "最低学历设为硕士"],
-            ["博士", "最低学历设为博士"]]
-          : [];
-      if (choices.length) {
-        const options = document.createElement("div");
-        options.className = "clarification-options";
-        for (const [label, answer] of choices) {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.textContent = label;
-          button.addEventListener("click", async () => {
-            options.querySelectorAll("button").forEach((item) => item.disabled = true);
-            try {
-              const updated = await this.api(`/sessions/${this.sessionId}/requirements`, {
-                method: "POST",
-                body: JSON.stringify({request_key: crypto.randomUUID(), content: answer}),
-              });
-              row.root.remove();
-              this.appendUserMessage(label);
-              this.renderRequirementDraft(updated);
-            } catch (error) {
-              this.appendError(error.message);
-              options.querySelectorAll("button").forEach((item) => item.disabled = false);
-            }
-          });
-          options.append(button);
-        }
-        row.content.append(options);
-      }
-    }
-    const confirm = document.createElement("button");
-    confirm.className = "matching-action";
-    confirm.textContent = "确认并开始找人";
-    confirm.disabled = requirements.ambiguities.length > 0;
-    const requestKey = crypto.randomUUID();
-    confirm.addEventListener("click", async () => {
-      confirm.disabled = true;
-      try {
-        const started = await this.api(`/sessions/${this.sessionId}/requirements/${draft.requirement_id}/confirm`, {
-          method: "POST", body: JSON.stringify({request_key: requestKey, requirements}),
-        });
-        confirm.textContent = "已确认";
-        this.watchMatch(started.run_id, started.mode);
-      } catch (error) { this.appendError(error.message); confirm.disabled = false; }
-    });
-    row.content.append(confirm);
-    this.scrollToBottom();
-  }
-
-  async watchMatch(runId, mode) {
-    const sessionId = this.sessionId;
-    const selector = `[data-match-run="${CSS.escape(runId)}"]`;
-    if (this.elements.conversation.querySelector(selector)) return;
-    const row = this.createMessageRow("assistant", "AI");
-    row.root.dataset.matchRun = runId;
-    row.content.textContent = "正在匹配候选人…";
-    const refresh = async () => {
-      if (this.sessionId !== sessionId || !row.root.isConnected) return;
-      try {
-        const run = await this.api(`/runs/${runId}`);
-        if (this.sessionId !== sessionId) return;
-        if (run.status === "SUCCEEDED" && (mode === "SIMPLE" || run.stage !== "matching")) {
-          const result = await this.api(`/sessions/${sessionId}/result`);
-          if (result?.run_id === runId) {
-            row.root.remove();
-            this.appendResults(result);
-            return;
-          }
-        }
-        const data = await this.api(`/sessions/${sessionId}/matches/${runId}?include_results=${!["RUNNING", "QUEUED"].includes(run.status)}`);
-        if (this.sessionId !== sessionId) return;
-        row.content.replaceChildren();
-        const title = document.createElement("h3");
-        title.textContent = `需求版本 ${data.plan_version} · 已检查 ${data.usage.checked_candidates} 人`;
-        row.content.append(title);
-        if (["RUNNING", "QUEUED"].includes(data.status)) {
-          this.updateSessionMetaFor(sessionId, `正在匹配 · 已评估 ${data.usage.checked_candidates} 人`);
-          const progress = document.createElement("p");
-          const matchingHint = data.provisional_result_count
-            ? `暂有 ${data.provisional_result_count} 位候选人可展示`
-            : data.provisional_pending_count
-              ? `暂有 ${data.provisional_pending_count} 位候选人正在核验偏好`
-              : "正在读取并核验证据";
-          progress.textContent = `已召回 ${data.recalled_count} 人，评估 ${data.usage.checked_candidates} 人；${matchingHint}`;
-          row.content.append(progress);
-          setTimeout(refresh, 1000);
-          return;
-        }
-        const stopped = document.createElement("p");
-        const reasons = {TARGET_REACHED: "已找到目标人数", SOURCE_EXHAUSTED: "候选池已读完",
-          PAGE_LIMIT: "达到搜索批次上限", CANDIDATE_LIMIT: "达到评估人数上限",
-          MODEL_LIMIT: "达到模型调用上限", TIME_LIMIT: "达到本轮时间上限",
-          NO_NEW_CANDIDATES: "没有更多新候选人", CANCELLED: "已取消",
-          DEPENDENCY_ERROR: "依赖服务异常", CONTEXT_LIMIT: "达到累计任务上限"};
-        stopped.className = data.result_count ? "matching-summary" : "matching-summary matching-empty";
-        stopped.textContent = data.result_count
-          ? `推荐 ${data.result_count} 人，另有 ${data.pending_count} 人待核验；${reasons[data.stop_reason] || data.stop_reason}`
-          : data.pending_count
-            ? `找到 ${data.pending_count} 位偏好证据待核验候选人；${reasons[data.stop_reason] || data.stop_reason}`
-            : `本轮确实没有召回可展示人选；${reasons[data.stop_reason] || data.stop_reason}`;
-        row.content.append(stopped);
-        const matchMeta = data.result_count || data.pending_count
-          ? `匹配完成 · ${data.result_count + data.pending_count} 人 · 计划 v${data.plan_version}`
-          : `未召回候选人 · 计划 v${data.plan_version}`;
-        this.updateSessionMetaFor(sessionId, matchMeta);
-        const preferenceNames = new Map((data.requirements?.preferences || [])
-          .map((item) => [item.id, item.description]));
-        for (const [group, label] of [["candidates", "推荐"], ["pending", "待核验"]]) {
-          for (const person of data[group] || []) {
-            const detail = document.createElement("details");
-            detail.className = "matching-candidate";
-            const heading = document.createElement("summary");
-            const name = person.card.display_name || person.card.candidate_id;
-            const supported = person.evaluation.evidence.filter((item) =>
-              ["SUPPORTED", "PARTIAL"].includes(item.status));
-            const compactPreference = (item) => {
-              const full = preferenceNames.get(item.criterion_id) || item.explanation;
-              const cleaned = full.replace(/^(最好|优先|偏好|具备|熟悉)/, "")
-                .replace(/，?用于证据说明与排序.*$/, "").replace(/[。；]$/, "");
-              return cleaned.length > 18 ? `${cleaned.slice(0, 18)}…` : cleaned;
-            };
-            heading.innerHTML = `
-              <span class="candidate-avatar">${this.escapeHtml(name.slice(0, 1))}</span>
-              <span class="matching-candidate-main">
-                <strong>${this.escapeHtml(name)}</strong>
-                <span>${this.escapeHtml(person.card.headline || "职位暂未填写")}${person.card.current_company ? ` · ${this.escapeHtml(person.card.current_company)}` : ""}</span>
-                <span class="candidate-tags">${supported.map((item) =>
-                  `<span>${this.escapeHtml(compactPreference(item))}</span>`).join("")}</span>
-              </span>
-              <span class="matching-candidate-side">${this.escapeHtml(person.card.current_city || label)}</span>
-            `;
-            detail.append(heading);
-            const body = document.createElement("div");
-            body.className = "matching-candidate-detail";
-            const reasonTitle = document.createElement("h4");
-            reasonTitle.textContent = "推荐依据";
-            body.append(reasonTitle);
-            const statusNames = {SUPPORTED: "支持", PARTIAL: "部分支持", UNKNOWN: "信息不足",
-              CONTRADICTED: "存在矛盾"};
-            for (const evidence of person.evaluation.evidence) {
-              const reason = document.createElement("div");
-              reason.className = `matching-reason status-${evidence.status.toLowerCase()}`;
-              const badge = document.createElement("span");
-              badge.className = "matching-reason-status";
-              badge.textContent = statusNames[evidence.status] || evidence.status;
-              const explanation = document.createElement("span");
-              explanation.textContent = evidence.explanation;
-              reason.append(badge, explanation);
-              body.append(reason);
-            }
-            const education = (person.profile_sources || []).filter((item) => item.path.includes("education"));
-            const work = (person.profile_sources || []).filter((item) => item.path.includes("work"));
-            for (const [sectionName, sources] of [["教育经历", education], ["工作经历", work]]) {
-              if (!sources.length) continue;
-              const sectionTitle = document.createElement("h4");
-              sectionTitle.textContent = sectionName;
-              body.append(sectionTitle);
-              for (const source of sources) {
-                const line = document.createElement("p");
-                line.textContent = source.text;
-                body.append(line);
-              }
-            }
-            if (!education.length && !work.length) {
-              const empty = document.createElement("p");
-              empty.textContent = "教育和工作经历暂未填写。";
-              body.append(empty);
-            }
-            detail.append(body);
-            row.content.append(detail);
-          }
-        }
-        for (const item of data.requirements?.interview_items || []) {
-          const line = document.createElement("p");
-          line.textContent = `面试待验证：${item.description}`;
-          row.content.append(line);
-        }
-        const next = document.createElement("button");
-        next.className = "matching-action"; next.textContent = "继续找 10 位";
-        next.disabled = !data.can_continue;
-        const key = crypto.randomUUID();
-        next.addEventListener("click", async () => {
-          next.disabled = true;
-          try {
-            const started = await this.api(`/sessions/${sessionId}/matches/${runId}/continue`, {
-              method: "POST", body: JSON.stringify({request_key: key}),
-            });
-            this.watchMatch(started.run_id, started.mode);
-          } catch (error) { this.appendError(error.message); next.disabled = false; }
-        });
-        row.content.append(next);
-      } catch (error) { row.content.textContent = error.message; }
-    };
-    await refresh();
-  }
-
   appendAssistantText(content) {
     this.removeWelcome();
     const row = this.createMessageRow("assistant", "AI");
@@ -841,18 +576,51 @@ class TalentAgentPage {
       </div>
     `;
     result.candidates.forEach((candidate) => {
-      const item = document.createElement("div");
-      item.className = "candidate-row";
+      const hasPreference = (candidate.preference_evidence || []).length > 0;
+      const item = document.createElement(hasPreference ? "details" : "div");
+      item.className = hasPreference ? "candidate-row candidate-expandable" : "candidate-row";
       const name = candidate.display_name || "候选人";
-      item.innerHTML = `
+      const summary = document.createElement(hasPreference ? "summary" : "div");
+      summary.className = "candidate-summary";
+      const preferenceTags = (candidate.preference_evidence || []).map((evidence) =>
+        `<span>${this.escapeHtml(evidence.preference)}</span>`).join("");
+      summary.innerHTML = `
         <div class="candidate-avatar">${this.escapeHtml(name.slice(0, 1))}</div>
-        <div>
+        <div class="candidate-main">
           <div class="candidate-name">${this.escapeHtml(name)}</div>
           <div class="candidate-meta">${this.escapeHtml(candidate.headline || "职位暂未填写")}${candidate.current_company ? ` · ${this.escapeHtml(candidate.current_company)}` : ""}</div>
-          <div class="candidate-tags">${(candidate.highlights || []).map((tag) => `<span>${this.escapeHtml(tag)}</span>`).join("")}</div>
+          <div class="candidate-tags">${preferenceTags || (candidate.highlights || []).map((tag) => `<span>${this.escapeHtml(tag)}</span>`).join("")}</div>
         </div>
         <div class="candidate-city">${this.escapeHtml(candidate.current_city || "")}</div>
       `;
+      item.append(summary);
+      if (hasPreference) {
+        const detail = document.createElement("div");
+        detail.className = "candidate-detail";
+        const reasons = document.createElement("section");
+        reasons.innerHTML = "<h4>推荐依据</h4>";
+        for (const evidence of candidate.preference_evidence) {
+          const line = document.createElement("p");
+          line.className = `matching-reason status-${evidence.status.toLowerCase()}`;
+          const status = evidence.status === "SUPPORTED" ? "支持" : "部分支持";
+          line.innerHTML = `<span class="matching-reason-status">${status}</span><span>${this.escapeHtml(evidence.explanation)}</span>`;
+          reasons.append(line);
+        }
+        detail.append(reasons);
+        for (const [category, title] of [["WORK", "工作经历"], ["EDUCATION", "教育经历"]]) {
+          const experiences = (candidate.experiences || []).filter((item) => item.category === category);
+          if (!experiences.length) continue;
+          const section = document.createElement("section");
+          section.innerHTML = `<h4>${title}</h4>`;
+          experiences.forEach((experience) => {
+            const line = document.createElement("p");
+            line.textContent = experience.text;
+            section.append(line);
+          });
+          detail.append(section);
+        }
+        item.append(detail);
+      }
       block.append(item);
     });
     if (result.next_page || result.page > 1) {

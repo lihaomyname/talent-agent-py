@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, JsonValue, SecretStr
+from pydantic import Field, SecretStr
 
 from talent_agent_py.domain.base import StrictModel
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
@@ -91,8 +91,6 @@ class SessionView(StrictModel):
     current_plan: SearchPlan | None = None
     # 待回答的澄清卡；没有阻塞问题时为空。
     pending_clarification: ClarificationCard | None = None
-    matching_draft: dict[str, JsonValue] | None = None
-    matching_requirements: dict[str, JsonValue] | None = None
     # 记录创建时间。
     created_at: datetime
     # 记录最近更新时间。
@@ -146,6 +144,24 @@ class PageReference(StrictModel):
     page: int = Field(ge=1, le=1000)
 
 
+class PreferenceEvidenceView(StrictModel):
+    """页面展示的一条偏好证据。"""
+
+    preference_id: str
+    preference: str
+    status: Literal["SUPPORTED", "PARTIAL"]
+    explanation: str
+    quote: str | None = None
+
+
+class ExperienceView(StrictModel):
+    """候选人的一条教育或工作经历展示数据。"""
+
+    category: Literal["EDUCATION", "WORK"]
+    path: str
+    text: str
+
+
 class CandidateCard(StrictModel):
     """Java 返回的安全候选人卡片。"""
 
@@ -161,6 +177,10 @@ class CandidateCard(StrictModel):
     current_city: str | None = None
     # 招聘接口返回的候选人摘要亮点，不由模型补造。
     highlights: list[str] = Field(default_factory=list, max_length=20)
+    # 普通搜索为空；偏好搜索时用于同一卡片增加标签和推荐依据。
+    preference_evidence: list[PreferenceEvidenceView] = Field(default_factory=list)
+    # 偏好搜索读取的白名单教育/工作经历，默认折叠展示。
+    experiences: list[ExperienceView] = Field(default_factory=list)
 
 
 class SearchResult(StrictModel):
@@ -200,7 +220,6 @@ class MessageOutcome(StrictModel):
     # CHAT 分支的文本回复；其他分支通常为空。
     reply: str | None = None
     is_page: bool = False
-    matching_reference: dict[str, JsonValue] | None = None
 
 
 class MessageHistoryView(StrictModel):

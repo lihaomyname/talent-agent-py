@@ -8,7 +8,6 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from talent_agent_py.application.matching_snapshots import read_search_plan, snapshot_kind
 from talent_agent_py.domain.conversation import ClarificationCard
 from talent_agent_py.domain.enums import RunStatus
 from talent_agent_py.domain.plan import SearchPlan, SearchPlanDraft
@@ -169,7 +168,17 @@ class PlanRepository:
             .limit(1)
         )
         record = await self.session.scalar(query)
-        return read_search_plan(record.plan_json) if record else None
+        if record is None:
+            return None
+        payload = record.plan_json
+        # 兼容开发期间保存过的旧匹配计划；新代码不再写这种结构。
+        if payload.get("kind") == "matching_plan":
+            legacy_payload = payload
+            payload = dict(legacy_payload["search_plan"])
+            payload["preferences"] = legacy_payload.get("requirements", {}).get(
+                "preferences", []
+            )
+        return SearchPlan.model_validate(payload, strict=False)
 
     async def save(self, session_record: AgentSessionRecord, plan: SearchPlan) -> SearchPlan:
         """新增不可变计划快照、更新会话版本指针并返回原计划；事务退出时提交。"""
@@ -203,7 +212,7 @@ class ClarificationRepository:
             PendingClarificationRecord.session_id == session_id
         )
         record = await self.session.scalar(query)
-        if record and snapshot_kind(record.card_json) == "matching_draft":
+        if record and record.card_json.get("kind") == "matching_draft":
             return None
         return ClarificationCard.model_validate(record.card_json, strict=False) if record else None
 
@@ -217,7 +226,7 @@ class ClarificationRepository:
         ))
         if not record:
             return None
-        if snapshot_kind(record.card_json) == "matching_draft":
+        if record.card_json.get("kind") == "matching_draft":
             return None
         draft = (
             SearchPlanDraft.model_validate(record.draft_json, strict=False)
