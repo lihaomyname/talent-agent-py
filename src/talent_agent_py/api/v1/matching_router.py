@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from talent_agent_py.api.dependencies import get_user_context
 from talent_agent_py.domain.conversation import UserContext
 from talent_agent_py.infrastructure.clients.matching_llm import validate_image
+from talent_agent_py.infrastructure.clients.model_session import model_session
 
 router = APIRouter()
 UserDep = Annotated[UserContext, Depends(get_user_context)]
@@ -40,12 +41,13 @@ async def prepare_image(
         mime = validate_image(data, settings)
         if image.content_type != mime:
             raise HTTPException(status_code=400, detail="图片内容与声明格式不一致")
-        natural_language = await request.app.state.image_llm.extract_image_text(content, data)
-        return await request.app.state.agent_service.handle_message(
-            session_id=session_id,
-            client_message_id=request_key,
-            content=natural_language,
-            user=user,
-        )
+        with model_session(session_id):
+            natural_language = await request.app.state.image_llm.extract_image_text(content, data)
+            return await request.app.state.agent_service.handle_message(
+                session_id=session_id,
+                client_message_id=request_key,
+                content=natural_language,
+                user=user,
+            )
     finally:
         await image.close()

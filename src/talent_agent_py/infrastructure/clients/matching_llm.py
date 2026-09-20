@@ -1,8 +1,10 @@
 """匹配专用模型调用；单次尝试，重试由有预算的应用层控制。"""
 
+import asyncio
 import base64
 import io
 import json
+import time
 import warnings
 
 import httpx
@@ -13,6 +15,7 @@ from talent_agent_py.application.exceptions import ModelOutputError
 from talent_agent_py.domain.base import StrictModel
 from talent_agent_py.domain.matching import EvaluationBatch
 from talent_agent_py.domain.plan import Preference
+from talent_agent_py.infrastructure.persistence.model_message_writer import ModelMessageWriter
 from talent_agent_py.settings import Settings
 
 IMAGE_PROMPT = """你只负责把招聘截图中的文字整理成一段自然语言找人需求。
@@ -66,9 +69,15 @@ def validate_image(data: bytes, settings: Settings) -> str:
 
 
 class MatchingLLMClient:
-    def __init__(self, settings: Settings, http_client: httpx.AsyncClient):
+    def __init__(
+        self,
+        settings: Settings,
+        http_client: httpx.AsyncClient,
+        message_writer: ModelMessageWriter | None = None,
+    ):
         self.settings = settings
         self.http = http_client
+        self.message_writer = message_writer
 
     async def _call(self, prompt, content, output_type, *, vision=False):
         settings = self.settings
@@ -79,6 +88,18 @@ class MatchingLLMClient:
         if not endpoint or not key:
             raise ModelOutputError("请配置视觉模型端点和密钥" if vision else "请配置文本模型")
         schema = json.dumps(output_type.model_json_schema(), ensure_ascii=False)
+        system_prompt = prompt + "\nJSON Schema:\n" + schema
+        invocation_id = None
+        audit_input = self._audit_input(content)
+        if self.message_writer:
+            invocation_id = await self.message_writer.write_user(
+                output_type.__name__, 1,
+                model, system_prompt, audit_input,
+            )
+        started = time.perf_counter()
+        response_text = None
+        response_body = None
+        request_succeeded = False
         try:
             response = await self.http.post(
                 endpoint.rstrip("/") + "/chat/completions",
@@ -87,15 +108,29 @@ class MatchingLLMClient:
                     "model": model,
                     "response_format": {"type": "json_object"},
                     "messages": [
-                        {"role": "system", "content": prompt + "\nJSON Schema:\n" + schema},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": content},
                     ],
                 },
                 timeout=timeout,
             )
+            response_text = response.text
             response.raise_for_status()
-            payload = response.json()["choices"][0]["message"]["content"]
-            return output_type.model_validate(json.loads(payload), strict=False)
+            request_succeeded = True
+            response_body = response.json()
+            response_text = response_body["choices"][0]["message"]["content"]
+            parsed = output_type.model_validate(json.loads(response_text), strict=False)
+            await self._write_assistant(
+                invocation_id, output_type.__name__, model,
+                response_text, "SUCCESS", started, response_body,
+            )
+            return parsed
+        except asyncio.CancelledError as exc:
+            await self._write_assistant(
+                invocation_id, output_type.__name__, model,
+                response_text, "ERROR", started, response_body, error=exc,
+            )
+            raise
         except (
             httpx.HTTPError,
             ValueError,
@@ -104,9 +139,46 @@ class MatchingLLMClient:
             TypeError,
             ValidationError,
         ) as exc:
+            await self._write_assistant(
+                invocation_id, output_type.__name__, model,
+                response_text, "INVALID_OUTPUT" if request_succeeded else "ERROR",
+                started, response_body, error=exc,
+            )
             raise ModelOutputError(
                 "视觉模型调用或结构化输出失败" if vision else "匹配模型调用或输出失败"
             ) from exc
+
+    @staticmethod
+    def _audit_input(content) -> str:
+        """截图只记录文字和媒体类型，不保存 Base64 图片。"""
+
+        if not isinstance(content, list):
+            return str(content)
+        safe_content = []
+        for item in content:
+            if item.get("type") == "image_url":
+                url = item.get("image_url", {}).get("url", "")
+                media_type = url.split(";", 1)[0].removeprefix("data:")
+                safe_content.append({"type": "image", "media_type": media_type})
+            else:
+                safe_content.append(item)
+        return json.dumps(safe_content, ensure_ascii=False)
+
+    async def _write_assistant(
+        self, invocation_id, operation, model, content, status,
+        started, response_body, *, error=None,
+    ) -> None:
+        if not self.message_writer:
+            return
+        usage = response_body.get("usage", {}) if response_body else {}
+        await self.message_writer.write_assistant(
+            invocation_id, operation, 1, model, content, status,
+            round((time.perf_counter() - started) * 1000),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            total_tokens=usage.get("total_tokens"),
+            error_message=str(error) if error else None,
+        )
 
     async def extract_image_text(self, text: str, image: bytes) -> str:
         """将截图和补充文字合并成一段文本，后续仍走原搜索流程。"""

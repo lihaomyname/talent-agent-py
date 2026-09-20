@@ -15,7 +15,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+LONG_TEXT = Text().with_variant(LONGTEXT(), "mysql")
+MODEL_MESSAGE_ID = BigInteger().with_variant(Integer, "sqlite")
 
 
 def utc_now() -> datetime:
@@ -91,6 +95,45 @@ class MessageRecord(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, comment="消息接收时间"
+    )
+
+
+class ModelMessageRecord(Base):
+    """模型调用消息；同一次调用固定保存 user 和 assistant 两行。"""
+
+    __tablename__ = "agent_model_messages"
+    __table_args__ = (
+        UniqueConstraint("invocation_id", "role", name="uq_model_message_role"),
+        {"comment": "模型原始请求与响应消息"},
+    )
+
+    id: Mapped[int] = mapped_column(MODEL_MESSAGE_ID, primary_key=True, autoincrement=True)
+    invocation_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, index=True, comment="模型调用顺序号；请求和响应使用相同值"
+    )
+    session_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True, comment="所属业务会话"
+    )
+    role: Mapped[str] = mapped_column(String(20), comment="user 或 assistant")
+    operation: Mapped[str] = mapped_column(String(80), comment="模型调用用途")
+    attempt: Mapped[int] = mapped_column(Integer, default=1, comment="第几次请求尝试")
+    model: Mapped[str] = mapped_column(String(128), comment="模型名称")
+    system_prompt: Mapped[str | None] = mapped_column(
+        LONG_TEXT, nullable=True, comment="user 行保存实际系统提示词"
+    )
+    content: Mapped[str | None] = mapped_column(
+        LONG_TEXT, nullable=True, comment="user 输入或 assistant 原始回复"
+    )
+    status: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, comment="assistant 行保存 SUCCESS、INVALID_OUTPUT 或 ERROR"
+    )
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, comment="记录时间"
     )
 
 

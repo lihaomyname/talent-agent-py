@@ -40,6 +40,7 @@ from talent_agent_py.domain.conversation import (
 )
 from talent_agent_py.domain.enums import ClarificationKind, MessageType, ResultStatus, RunStatus
 from talent_agent_py.domain.plan import SearchPlan, SearchPlanDraft
+from talent_agent_py.infrastructure.clients.model_session import model_session
 from talent_agent_py.infrastructure.persistence.models import AgentSessionRecord, RunRecord
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 from talent_agent_py.infrastructure.runtime.task_registry import TaskRegistry
@@ -122,10 +123,11 @@ class AgentService:
 
         if not self._settings.enable_agent:
             raise FeatureDisabledError("当前环境尚未开启自然语言找人")
-        outcome = await self._handle_message(
-            session_id=session_id, client_message_id=client_message_id,
-            content=content, user=user, clarification_answer=clarification_answer,
-        )
+        with model_session(session_id):
+            outcome = await self._handle_message(
+                session_id=session_id, client_message_id=client_message_id,
+                content=content, user=user, clarification_answer=clarification_answer,
+            )
         async with self._uow_factory() as uow:
             message = await uow.messages.get_by_client_id(
                 session_id, client_message_id

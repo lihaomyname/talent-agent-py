@@ -27,6 +27,7 @@ from talent_agent_py.infrastructure.clients.internal_llm import (
 from talent_agent_py.infrastructure.clients.java_talent import JavaTalentClient
 from talent_agent_py.infrastructure.clients.matching_llm import MatchingLLMClient
 from talent_agent_py.infrastructure.persistence.database import Database
+from talent_agent_py.infrastructure.persistence.model_message_writer import ModelMessageWriter
 from talent_agent_py.infrastructure.persistence.models import Base
 from talent_agent_py.infrastructure.persistence.unit_of_work import UnitOfWork
 from talent_agent_py.infrastructure.runtime.task_registry import TaskRegistry
@@ -62,8 +63,9 @@ def create_app(
             base_url=settings.java_base_url,
             timeout=httpx.Timeout(settings.java_timeout_seconds),
         )
+        model_message_writer = ModelMessageWriter(database.session_factory)
         llm = llm_client or (
-            InternalLLMClient(settings)
+            InternalLLMClient(settings, model_message_writer)
             if settings.llm_api_key is not None
             else UnavailableLLMClient()
         )
@@ -72,7 +74,9 @@ def create_app(
             """为一次业务操作创建独立事务单元。"""
 
             return UnitOfWork(database.session_factory)
-        matching_llm = matching_llm_client or MatchingLLMClient(settings, http_client)
+        matching_llm = matching_llm_client or MatchingLLMClient(
+            settings, http_client, model_message_writer
+        )
         graph = build_graph(GraphDependencies(
             uow_factory=uow_factory,
             llm=llm,
